@@ -1,0 +1,28 @@
+# 构建产物
+/build/
+/build-*/
+/result
+/result-*
+compile_commands.json
+
+# Nix / direnv
+.direnv/
+.cache/
+
+# 编辑器与操作系统
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 本地环境与密钥
+.env
+.env.local
+*.pem
+*.key
+
+# 测试与覆盖率
+*.gcda
+*.gcno
+*.profraw
+coverage/
