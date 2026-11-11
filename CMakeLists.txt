@@ -56,6 +56,7 @@ target_link_libraries(qoderz_core
   PUBLIC
     nlohmann_json::nlohmann_json
     Boost::headers
+    CLI11::CLI11
   PRIVATE
     OpenSSL::SSL
     OpenSSL::Crypto
