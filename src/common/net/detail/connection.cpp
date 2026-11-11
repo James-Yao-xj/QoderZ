@@ -58,8 +58,9 @@ std::vector<http_header> copy_fields(http::fields const& fields) {
 
 } // namespace
 
-/// The parser and its flat buffer survive across requests on a reused connection, which is what
-/// lets bytes pipelined behind one response be consumed by the next one instead of being dropped.
+/// The flat buffer survives across requests on a reused connection, which is what lets bytes
+/// pipelined behind one response be consumed by the next one instead of being dropped; the parser
+/// itself is rebuilt for every response.
 struct connection::impl {
   asio::any_io_executor m_executor;
   parsed_url m_url;
@@ -194,10 +195,18 @@ boost::asio::awaitable<result<void>> connection::send(parsed_url const& url,
   for (auto const& header : request.m_headers) {
     message.set(header.m_name, header.m_value);
   }
+  // HTTP/1.1 requires a `Host` field on every request. A caller that already set one keeps it.
+  if (message.find(http::field::host) == message.end()) {
+    message.set(http::field::host, host_field_of(url));
+  }
   message.prepare_payload();
 
   auto& self = *m_impl;
+  // A new exchange starts with no response bytes of its own: the flag has to describe this request,
+  // not the previous response that this pooled connection carried before it.
+  self.m_response_started = false;
   self.lowest().expires_after(timeout);
+
   auto [ec, written] = co_await self.visit([&](auto& stream) {
     return http::async_write(stream, message, asio::as_tuple(asio::use_awaitable));
   });
@@ -224,6 +233,9 @@ connection::read_header(std::size_t max_body_bytes, std::chrono::milliseconds ti
                                    asio::as_tuple(asio::use_awaitable));
   });
   (void)header_bytes;
+  // `got_some` turns true as soon as the parser consumed one byte, so a peer that dies in the
+  // middle of the status line has already committed to an answer and must not be retried.
+  self.m_response_started = self.m_parser->got_some();
   if (ec) {
     if (ec == http::error::body_limit) {
       co_return std::unexpected(
@@ -231,7 +243,6 @@ connection::read_header(std::size_t max_body_bytes, std::chrono::milliseconds ti
     }
     co_return transfer_error(ec, self.m_url.m_host, "read");
   }
-
   self.m_response_started = true;
   auto const& header = self.m_parser->get();
   http_response response;

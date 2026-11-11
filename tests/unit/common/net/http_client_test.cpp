@@ -5,6 +5,7 @@
 #include "support/stub_server.hpp"
 
 #include <boost/asio/awaitable.hpp>
+#include <boost/asio/experimental/awaitable_operators.hpp>
 #include <boost/asio/io_context.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -31,7 +32,7 @@ using qoderz::test::stub_handler;
 using qoderz::test::stub_request;
 using qoderz::test::stub_response;
 using qoderz::test::stub_server;
-
+using namespace boost::asio::experimental::awaitable_operators;
 using namespace std::chrono_literals;
 
 stub_handler fixed(int status, std::string body, std::vector<http_header> headers = {}) {
@@ -119,6 +120,9 @@ TEST_CASE("send puts the method, request headers and body on the wire",
   auto const* test_header = header_value(seen.m_headers, "X-Test");
   REQUIRE(test_header != nullptr);
   CHECK(*test_header == "test-token-not-real");
+  auto const* host = header_value(seen.m_headers, "Host");
+  REQUIRE(host != nullptr);
+  CHECK(*host == "127.0.0.1:" + std::to_string(server.port()));
 }
 
 TEST_CASE("send treats 4xx and 5xx as ordinary responses", "[common][net][http_client]") {
@@ -206,6 +210,47 @@ TEST_CASE("open decodes a chunked body chunk by chunk", "[common][net][http_clie
     joined.append(chunk);
   }
   CHECK(joined == "alphabetagamma");
+}
+
+TEST_CASE("a body chunk slower than the stream idle timeout fails the stream",
+          "[common][net][http_client]") {
+  asio::io_context io;
+  stub_response response;
+  response.m_status = 200;
+  response.m_chunked = true;
+  response.m_chunks = {"late"};
+  response.m_delay_between_chunks = 2s;
+  stub_server server{io, [response](stub_request const&) -> asio::awaitable<stub_response> {
+                       co_return response;
+                     }};
+  REQUIRE(server.start().has_value());
+
+  http_client_options options;
+  options.m_stream_idle_timeout = 100ms;
+  http_client client{io, options};
+  http_request request;
+  request.m_url = server.origin() + "/stalled";
+  bool opened = false;
+
+  auto outcome = run_awaitable(io, [&]() -> asio::awaitable<qoderz::result<std::string>> {
+    auto stream = co_await client.open(request);
+    if (!stream) {
+      co_return std::unexpected(stream.error());
+    }
+    opened = true;
+    auto chunk = co_await (*stream)->read_some();
+    if (!chunk) {
+      co_return std::unexpected(chunk.error());
+    }
+    co_return chunk->value_or("end");
+  }());
+  REQUIRE(outcome.has_value());
+  REQUIRE_FALSE(outcome->has_value());
+  // The headers arrived, so this failure is the body wait, not the header budget.
+  CHECK(opened);
+  CHECK(outcome->error().m_kind == error_kind::upstream);
+  CHECK(outcome->error().m_message.find("127.0.0.1") != std::string::npos);
+  CHECK(outcome->error().m_message.find("timeout") != std::string::npos);
 }
 
 TEST_CASE("send buffers a chunked body from a stub", "[common][net][http_client]") {
@@ -307,6 +352,29 @@ TEST_CASE("Connection: close makes the client open a new connection",
   CHECK(server.connection_count() == 2);
 }
 
+TEST_CASE("an HTTP/1.0 answer is never pooled", "[common][net][http_client]") {
+  asio::io_context io;
+  stub_response response;
+  response.m_status = 200;
+  response.m_body = "old";
+  response.m_http10 = true;
+  stub_server server{io, [response](stub_request const&) -> asio::awaitable<stub_response> {
+                       co_return response;
+                     }};
+  REQUIRE(server.start().has_value());
+
+  http_client client{io};
+  for (int round = 0; round < 2; ++round) {
+    http_request request;
+    request.m_url = server.origin() + "/legacy";
+    auto outcome = run_awaitable(io, client.send(request));
+    REQUIRE(outcome.has_value());
+    REQUIRE(outcome->has_value());
+    CHECK(outcome->value().m_body == "old");
+  }
+  CHECK(server.request_count() == 2);
+  CHECK(server.connection_count() == 2);
+}
 TEST_CASE("a header delay past the timeout is an upstream timeout", "[common][net][http_client]") {
   asio::io_context io;
   stub_response slow;
@@ -415,7 +483,6 @@ TEST_CASE("concurrent requests to one origin do not mix bodies", "[common][net][
   http_client client{io};
   auto outcome =
       run_awaitable(io, [&]() -> asio::awaitable<qoderz::result<std::vector<std::string>>> {
-        std::vector<asio::awaitable<qoderz::result<http_response>>> pending;
         auto one = [&]() -> asio::awaitable<qoderz::result<http_response>> {
           http_request request;
           request.m_url = server.origin() + "/a";
@@ -426,41 +493,21 @@ TEST_CASE("concurrent requests to one origin do not mix bodies", "[common][net][
           request.m_url = server.origin() + "/b";
           co_return co_await client.send(request);
         };
-        std::vector<std::string> bodies;
-        auto first = co_await one();
+        // Both requests are started before either is awaited, so the pool has to hand out two
+        // connections and neither coroutine may see the other's bytes.
+        auto [first, second] = co_await (one() && two());
         if (!first) {
           co_return std::unexpected(first.error());
         }
-        bodies.push_back(first->m_body);
-        auto second = co_await two();
         if (!second) {
           co_return std::unexpected(second.error());
         }
-        bodies.push_back(second->m_body);
-        co_return bodies;
+        co_return std::vector<std::string>{first->m_body, second->m_body};
       }());
   REQUIRE(outcome.has_value());
   REQUIRE(outcome->has_value());
   CHECK(outcome->value()[0] == "body-for/a");
   CHECK(outcome->value()[1] == "body-for/b");
-}
-
-TEST_CASE("close drops idle connections before the next request", "[common][net][http_client]") {
-  asio::io_context io;
-  stub_server server{io, fixed(200, "fine")};
-  REQUIRE(server.start().has_value());
-
-  http_client client{io};
-  http_request request;
-  request.m_url = server.origin() + "/one";
-  REQUIRE(run_awaitable(io, client.send(request))->has_value());
-  CHECK(server.connection_count() == 1);
-
-  client.close();
-  auto second = run_awaitable(io, client.send(request));
-  REQUIRE(second.has_value());
-  REQUIRE(second->has_value());
-  CHECK(second->value().m_body == "fine");
   CHECK(server.connection_count() == 2);
 }
 

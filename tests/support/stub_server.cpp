@@ -2,6 +2,7 @@
 
 #include "common/error.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <boost/asio/any_io_executor.hpp>
 #include <boost/asio/as_tuple.hpp>
@@ -51,7 +52,7 @@ std::string hex_size(std::size_t size) {
 
 std::string serialize(stub_response const& response) {
   std::string wire;
-  wire.append("HTTP/1.1 ");
+  wire.append(response.m_http10 ? "HTTP/1.0 " : "HTTP/1.1 ");
   wire.append(std::to_string(response.m_status));
   wire.append(" ");
   wire.append(http::obsolete_reason(static_cast<http::status>(response.m_status)));
@@ -128,6 +129,14 @@ boost::asio::awaitable<bool> write_response(beast::tcp_stream& stream,
     co_await pause(response.m_delay_before_headers);
   }
   auto const head = serialize(response);
+  if (response.m_truncate_header) {
+    auto const half = head.substr(0, head.size() / 2);
+    auto [ec, written] = co_await asio::async_write(stream.socket(), asio::buffer(half),
+                                                    asio::as_tuple(asio::use_awaitable));
+    (void)ec;
+    (void)written;
+    co_return false;
+  }
   auto [head_ec, head_written] = co_await asio::async_write(stream.socket(), asio::buffer(head),
                                                             asio::as_tuple(asio::use_awaitable));
   (void)head_written;
@@ -163,7 +172,7 @@ boost::asio::awaitable<bool> write_response(beast::tcp_stream& stream,
         co_await asio::async_write(stream.socket(), asio::buffer(std::string{"0\r\n\r\n"}),
                                    asio::as_tuple(asio::use_awaitable));
     (void)last_written;
-    co_return !last_ec;
+    co_return !last_ec && !response.m_close_silently;
   }
   std::string body = response.m_body;
   for (auto const& chunk : response.m_chunks) {
@@ -172,7 +181,7 @@ boost::asio::awaitable<bool> write_response(beast::tcp_stream& stream,
   auto [body_ec, body_written] = co_await asio::async_write(stream.socket(), asio::buffer(body),
                                                             asio::as_tuple(asio::use_awaitable));
   (void)body_written;
-  co_return !body_ec;
+  co_return !body_ec && !response.m_close_silently;
 }
 
 boost::asio::awaitable<void> serve_connection(std::shared_ptr<state_type> state,

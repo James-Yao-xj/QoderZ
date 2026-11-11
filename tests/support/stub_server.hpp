@@ -33,6 +33,15 @@ struct stub_response {
   /// Writes the headers, then half of `m_body`, then drops the connection. Only for tests that need
   /// a peer to vanish in the middle of a response.
   bool m_truncate_body = false;
+  /// Writes half of the header block, then drops the connection. Only for tests that need a peer to
+  /// vanish after the client has already seen response bytes.
+  bool m_truncate_header = false;
+  /// Writes the whole response, without `Connection: close`, and then drops the connection. Only
+  /// for tests that need the client to pool a connection the peer has already abandoned.
+  bool m_close_silently = false;
+  /// Answers with `HTTP/1.0`, which makes the connection single-use even without `Connection:
+  /// close`.
+  bool m_http10 = false;
 };
 
 using stub_handler = std::function<boost::asio::awaitable<stub_response>(stub_request const&)>;

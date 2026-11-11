@@ -168,7 +168,10 @@ std::string format_amount(double value) {
   if (written <= 0) {
     return "0";
   }
-  std::string text(buffer, static_cast<std::size_t>(written));
+  // `snprintf` reports the length the value *would* need, which overflows `buffer` for amounts past
+  // the buffer; clamping keeps a huge upstream number from reading past the array.
+  auto const length = std::min(static_cast<std::size_t>(written), sizeof(buffer) - 1);
+  std::string text(buffer, length);
   auto const dot = text.find('.');
   if (dot != std::string::npos) {
     while (!text.empty() && text.back() == '0') {

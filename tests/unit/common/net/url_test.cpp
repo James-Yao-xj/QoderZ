@@ -5,6 +5,7 @@
 #include <string>
 
 using qoderz::error_kind;
+using qoderz::net::host_field_of;
 using qoderz::net::is_loopback_host;
 using qoderz::net::origin_of;
 using qoderz::net::parse_url;
@@ -34,6 +35,36 @@ TEST_CASE("an explicit port wins over the scheme default", "[common][net][url]")
   REQUIRE(url.has_value());
   CHECK(url->m_port == "8080");
   CHECK(url->m_target == "/sash/api?x=1");
+}
+TEST_CASE("the Host field carries the port only when it is not the default", "[common][net][url]") {
+  auto const plain = parse_url("http://api.example.com/");
+  REQUIRE(plain.has_value());
+  CHECK(host_field_of(*plain) == "api.example.com");
+
+  auto const custom_port = parse_url("http://api.example.com:8080/x");
+  REQUIRE(custom_port.has_value());
+  CHECK(host_field_of(*custom_port) == "api.example.com:8080");
+
+  auto const secure = parse_url("https://api.example.com/");
+  REQUIRE(secure.has_value());
+  CHECK(host_field_of(*secure) == "api.example.com");
+
+  auto const secure_custom_port = parse_url("https://api.example.com:8443/");
+  REQUIRE(secure_custom_port.has_value());
+  CHECK(host_field_of(*secure_custom_port) == "api.example.com:8443");
+
+  // An explicit default port is still the default port; the field must not grow a `:80`.
+  auto const spelled_out = parse_url("http://api.example.com:80/");
+  REQUIRE(spelled_out.has_value());
+  CHECK(host_field_of(*spelled_out) == "api.example.com");
+
+  auto const ipv6 = parse_url("http://[::1]:9000/");
+  REQUIRE(ipv6.has_value());
+  CHECK(host_field_of(*ipv6) == "[::1]:9000");
+
+  auto const ipv6_default = parse_url("http://[::1]/");
+  REQUIRE(ipv6_default.has_value());
+  CHECK(host_field_of(*ipv6_default) == "[::1]");
 }
 
 TEST_CASE("an empty path becomes a single slash", "[common][net][url]") {

@@ -36,4 +36,8 @@ struct parsed_url {
 /// `scheme://host:port` with brackets restored for IPv6 literals; the pool key.
 [[nodiscard]] std::string origin_of(parsed_url const& url);
 
+/// The value of the HTTP/1.1 `Host` field: the host with its brackets restored when it is an IPv6
+/// literal, plus the port only when it differs from the scheme default.
+[[nodiscard]] std::string host_field_of(parsed_url const& url);
+
 } // namespace qoderz::net

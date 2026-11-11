@@ -119,6 +119,16 @@ std::vector<std::string> keys_of(std::vector<model_info> const& models) {
   return keys;
 }
 
+/// The fallback entry for `key`, or nullptr when the built-in list does not carry it.
+model_info const* model_of(std::vector<model_info> const& models, std::string_view key) {
+  for (auto const& model : models) {
+    if (model.m_key == key) {
+      return &model;
+    }
+  }
+  return nullptr;
+}
+
 } // namespace
 
 TEST_CASE("catalog_service fetches the listing and parses the merged models",
@@ -539,6 +549,28 @@ TEST_CASE("fallback_models carries the documented built-in lists", "[qoder][cata
     CHECK(model.m_rate_was == 0);
     CHECK(model.m_default_window == model.m_context);
   }
+
+  // Spot-check the ported data: a wrong context or effort ladder is invisible in a count check.
+  auto const* ultimate = model_of(international, "ultimate");
+  REQUIRE(ultimate != nullptr);
+  CHECK(ultimate->m_context == 1'000'000);
+  CHECK(ultimate->m_efforts == std::vector<std::string>{"low", "medium", "high", "xhigh", "max"});
+
+  auto const* qwen = model_of(international, "qmodel_38max");
+  REQUIRE(qwen != nullptr);
+  CHECK(qwen->m_name == "Qwen3.8-Max");
+  CHECK(qwen->m_context == 180'000);
+  CHECK(qwen->m_efforts == std::vector<std::string>{"low", "medium", "xhigh"});
+
+  auto const* kimi = model_of(international, "kmodel");
+  REQUIRE(kimi != nullptr);
+  CHECK(kimi->m_context == 0);
+  CHECK(kimi->m_efforts == std::vector<std::string>{"low", "high", "max"});
+
+  auto const* lite = model_of(china, "lite");
+  REQUIRE(lite != nullptr);
+  CHECK(lite->m_context == 0);
+  CHECK(lite->m_efforts.empty());
 
   // An unknown site still gets a usable list rather than "no models".
   CHECK(fallback_models("unknown").size() == 17);

@@ -136,4 +136,24 @@ std::string origin_of(parsed_url const& url) {
   return origin;
 }
 
+std::string host_field_of(parsed_url const& url) {
+  bool const is_ipv6 = url.m_host.find(':') != std::string::npos;
+  bool const default_port = (url.m_scheme == http_scheme && url.m_port == http_port) ||
+                            (url.m_scheme == https_scheme && url.m_port == https_port);
+  std::string host;
+  host.reserve(url.m_host.size() + url.m_port.size() + 4);
+  if (is_ipv6) {
+    host.push_back('[');
+  }
+  host.append(url.m_host);
+  if (is_ipv6) {
+    host.push_back(']');
+  }
+  if (!default_port) {
+    host.push_back(':');
+    host.append(url.m_port);
+  }
+  return host;
+}
+
 } // namespace qoderz::net

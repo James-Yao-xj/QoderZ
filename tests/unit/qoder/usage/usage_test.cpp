@@ -503,3 +503,20 @@ TEST_CASE("usage_service never logs the tokens", "[qoder][usage]") {
   CHECK(logged.find("tester@example.invalid") == std::string::npos);
   CHECK(logged.find("Bearer") == std::string::npos);
 }
+
+TEST_CASE("parse_usage keeps a huge amount inside the display buffer", "[qoder][usage]") {
+  // `snprintf` reports the length the value would need, so an amount past the buffer must be
+  // clamped instead of reading past it.
+  auto const parsed = parse_usage(R"({
+    "displayMode":"qoder",
+    "qoderUsage":{"userQuota":{"total":1e300,"used":1}}
+  })");
+  REQUIRE(parsed.has_value());
+  REQUIRE(parsed->m_windows.size() == 1);
+
+  auto const& window = parsed->m_windows[0];
+  CHECK(window.m_percent == 0);
+  CHECK(window.m_total > 0);
+  CHECK(window.m_display.size() < 100);
+  CHECK(window.m_display.find_first_not_of("0123456789./ credits") == std::string::npos);
+}
