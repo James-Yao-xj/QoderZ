@@ -62,7 +62,7 @@ ctest --test-dir build -R error -V # 只跑匹配的测试，显示命令
 clang-format --style=file:.clang-format src/main.cpp | diff -u src/main.cpp -  # 查看格式差异
 ```
 
-日志级别目前在库内通过 `qoderz::set_log_level` 设置；CLI 环境变量接入会在后续批次完成。调试时不要把真实凭据放进命令行历史。
+日志级别由 `--log-level`、`QODERZ_LOG_LEVEL` 或库内 `qoderz::set_log_level` 设置，优先级依次降低。调试时不要把真实凭据放进命令行历史；需要 PAT 时用 `--pat-stdin` 或 `QODERZ_PAT`。
 
 ## 版本升级
 

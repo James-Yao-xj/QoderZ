@@ -5,9 +5,10 @@
 ## 框架与位置
 
 - 框架固定 Catch2 v3，链接 `Catch2::Catch2WithMain`，测试文件不需要自己写 `main`。
-- 测试入口在 `tests/CMakeLists.txt`；它用 `GLOB_RECURSE CONFIGURE_DEPENDS` 自动收集 `tests/unit/**/*.cpp` 与 `tests/support/*.cpp`，新增测试文件不需要改列表。
+- 测试入口在 `tests/CMakeLists.txt`；它用 `GLOB_RECURSE CONFIGURE_DEPENDS` 自动收集 `tests/unit/**/*.cpp`、`tests/integration/**/*.cpp` 与 `tests/support/*.cpp`，新增测试文件不需要改列表。
 - 单元测试放在 `tests/unit/<层>/`，按模块分子目录（例如 `common/`、`protocol/`、`config/`）；共享夹具放在 `tests/support/`。
-- 未来集成测试放在 `tests/integration/`，每个测试自己启动 loopback stub。
+- 进程级端到端测试放在 `tests/integration/`，每个测试自己启动 loopback stub 与 `qoderz` 子进程。
+- `tests/stub_upstream/` 是独立的 stub 上游可执行文件，只在 `BUILD_TESTING=ON` 时构建，不安装。
 - 一个目录下的代码文件不超过 8 个；测试多了同样按职责拆子目录。
 
 ## 常用命令
@@ -22,13 +23,15 @@ nix develop --command ctest --test-dir build --output-on-failure
 
 ```sh
 ./build/tests/qoderz_tests "[common][error]"
-./build/tests/qoderz_tests "[common][log]"
+./build/tests/qoderz_e2e
+./build/tests/qoderz_tests "[cli][integration]"
 ```
 
 列出测试：
 
 ```sh
 ./build/tests/qoderz_tests --list-tests
+./build/tests/qoderz_e2e --list-tests
 ctest --test-dir build -N
 ```
 
@@ -54,12 +57,10 @@ static_assert(qoderz::to_string(error_kind::quota) == "quota");
 static_assert(qoderz::default_http_status(error_kind::quota) == 429);
 ```
 
-当前骨架覆盖：错误名称、默认 HTTP 状态、具名构造 helper、`result<T>` 的成功/失败分支、日志级别往返解析、大小写与非法输入、日志阈值读写。
-
 ## loopback stub
 
 涉及 HTTP 与上游协议时，测试必须在 `127.0.0.1` 上自建 stub，不允许连接真实 Qoder。
-`tests/support/stub_server.hpp` 提供了这套基础设施，`tests/support/async_test.hpp` 负责把协程跑完：
+`tests/support/stub_server.hpp` 提供了进程内基础设施，`tests/support/async_test.hpp` 负责把协程跑完：
 
 - stub 由测试进程持有，绑定 `127.0.0.1:0` 让操作系统分配端口，避免固定端口冲突。
 - 把 stub 的 base URL 通过构造参数或依赖注入传给被测对象，不要在代码里硬编码线上域名。
@@ -70,12 +71,59 @@ static_assert(qoderz::default_http_status(error_kind::quota) == 429);
 - 不访问外部 DNS、不走系统代理、不依赖公网证书。TLS 相关测试使用测试专用证书或本地终止，不导入真实证书。
 - 时间相关的逻辑注入 `qoderz::clock`，测试用假时钟推进，不用 `sleep`。
 
+## stub 上游可执行文件
+
+`tests/stub_upstream/` 把同一份协议夹具做成可以独立启动的进程，供端到端测试与手工冒烟使用：
+
+```sh
+./build/tests/qoderz_stub_upstream --listen http://127.0.0.1:18899
+./build/tests/qoderz_stub_upstream --listen http://127.0.0.1:0 --chunks 8 --chunk-bytes 256
+./build/tests/qoderz_e2e                      # 端到端用例
+```
+
+- `--listen` 只接受 loopback `http://` origin；`--port` 覆盖端口，`0` 表示让内核分配。
+- 启动后向 stdout 打印 `stub-upstream listening on <origin>` 并 flush，调用方据此拿到实际端口。
+- 路由只看路径：`/algo/api/v2/model/list` 返回固定模型 `stub-model`；含 `agent_chat_generation` 返回 SSE（`--chunks` 个 `--chunk-bytes` 字节的 `d` 帧、stop、usage、`[DONE]`）；含 `Token/refresh` 返回固定 token；含 `/me/usage` 返回固定额度；其它路径返回 `200 {}` 并在 stderr 打印 `unhandled path: METHOD path`。
+- 支持 keep-alive、chunked 与并发连接；不访问外网，不校验也不记录 token。
+- 响应夹具只在 `tests/stub_upstream/stub_logic.cpp` 里定义一份；它同时编译进测试，所以断言与可执行文件不会各自漂移。
+
+## 进程级端到端测试
+
+`tests/integration/e2e_server_test.cpp` 编译成独立测试可执行文件 `qoderz_e2e`，驱动真实的 `qoderz` 与
+`qoderz_stub_upstream` 子进程，覆盖 `docs/design/server.md` §9 的行为：
+
+1. 建临时目录与凭据文件（假 token、`vpc=""`，权限 0600）；
+2. 启动 stub 上游（`--listen http://127.0.0.1:0`），从 stdout 读取实际端口；
+3. 启动 `qoderz serve --listen http://127.0.0.1:0 --credentials <tmp>`，`QODERZ_UPSTREAM` 指向 stub，`HOME` 指向临时目录；
+4. 从 stderr 的 `listen:` 行读取实际端口，轮询 `/healthz` 直到就绪（超时 10 秒）；
+5. 用 `net::http_client` 发真实请求；结束时 SIGTERM 并等待退出。
+
+用例：`/healthz` 200；`/v1/models` 包含 `stub-model`；非流式 chat 的 content、`finish_reason` 与 usage；流式 chat 的 role 帧、content 帧、stop+usage 与 `[DONE]`；key 鉴权（无 key 200、配 key 后无 key 401、正确 key 200、`/healthz` 不鉴权）；404 / 405 / 413；空站点启动 exit 1；SIGTERM 后 10 秒内 exit 0。
+
+- 测试只连 `127.0.0.1`；不读写真实 HOME；不打印 token。
+- 子进程用 `posix_spawn` 直接 exec（不经过 shell），stdout/stderr 由读者线程持续抽走，避免管道写满。
+- 二进制路径来自 CMake 的 `QODERZ_BINARY` / `QODERZ_STUB_UPSTREAM` 编译定义，不依赖 `PATH`。
+
+## 性能脚本
+
+两个脚本都只连 loopback，并在退出时清理进程与临时文件：
+
+```sh
+./scripts/measure-idle.sh     # 5 秒预热后，5 次、间隔 2 秒采样；输出原始值与中位数
+./scripts/measure-load.sh     # 400 KB 文本 body、100 请求、并发 8；外部 curl 发压
+```
+
+- 第一次运行会构建 Release 到 `build-perf/`（可用 `QODERZ_PERF_BUILD_DIR` 改）；`--no-build` 跳过构建。
+- 采样口径：`/proc/<pid>/status` 的 `VmRSS` 与 `Threads`、`/proc/<pid>/smaps_rollup` 的 `Pss` 与 `Anonymous`、`/proc/<pid>/fd` 的条目数。
+- 只统计服务端进程；发压的 curl 进程不计入。
+- 脚本的输出直接贴进 [performance.md](../performance.md)；要改脚本先想清楚会不会让数字不可比。
+
 ## 禁止事项
 
 - 禁止使用真实 Qoder 账号、真实 token、真实 cookie 或录制真实会话。
-- 禁止在测试中调用真实 Qoder 服务；当前所有单元测试不联网，HTTP/协议测试只使用 `127.0.0.1` loopback stub。
+- 禁止在测试中调用真实 Qoder 服务；所有网络测试只使用 `127.0.0.1` loopback stub。
 - 禁止把抓包内容、用户 prompt、图片字节或 `Cosy-*` 头写进测试夹具、快照或日志。
-- 禁止用 `sleep` 等固定时长假装同步；用条件变量、future 或可注入的时钟。
+- 禁止用 `sleep` 等固定时长假装同步；用条件变量、future 或可注入的时钟。进程级测试的重试与超时除外，它们等待的是另一个进程的状态。
 - 禁止依赖测试执行顺序或共享可变全局状态。日志级别这类全局状态在用例结束后要恢复原值。
 
 ## 测试里的秘密处理
@@ -84,22 +132,11 @@ static_assert(qoderz::default_http_status(error_kind::quota) == 429);
 - 需要验证脱敏时，断言输出中不包含完整秘密，而不是把秘密打印出来人工检查。
 - 失败诊断只输出结构、状态码、长度或哈希前缀；不要把完整请求体倾倒到 stderr。
 
-## 集成测试的边界
-
-后续批次实现 HTTP 服务后，集成测试至少覆盖：
-
-1. `--version` / `--help` 的退出码与输出。
-2. OpenAI 兼容路由的请求/响应形状。
-3. 上游 401、429、5xx 到内部 `error_kind` 的映射。
-4. 超时、取消与重试上限。
-5. 日志脱敏（token、prompt、Authorization、Cosy-*）。
-
-在对应实现落地前，不提前写空壳测试；先把单元测试和 loopback stub 的接口设计好。
-
 ## 失败排查顺序
 
 1. 先确认是在 devShell 中配置和构建。
-2. 确认 `BUILD_TESTING=ON`，且 `build/tests/qoderz_tests` 存在。
+2. 确认 `BUILD_TESTING=ON`，且 `build/tests/qoderz_tests` 与 `build/tests/qoderz_e2e` 存在。
 3. 单独运行失败用例，看 Catch2 的表达式分解。
 4. 如果只有 CTest 失败、直接运行通过，检查测试注册和运行目录。
-5. 格式化或行数门禁失败时，先修复再跑全量测试，不要用跳过检查的方式“通过”。
+5. `qoderz_e2e` 失败时先看子进程输出：测试会把 `qoderz` 与 stub 的 stderr 保留在进程对象里；端口读取超时通常意味着启动即失败（凭据、站点或 `QODERZ_UPSTREAM`）。
+6. 格式化或行数门禁失败时，先修复再跑全量测试，不要用跳过检查的方式“通过”。
