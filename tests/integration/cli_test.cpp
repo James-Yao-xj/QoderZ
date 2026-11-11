@@ -300,6 +300,12 @@ TEST_CASE("serve rejects a subset that names no account", "[cli][integration]") 
   auto const plan =
       qoderz::cli::plan_serve(context, listen_and_accounts("http://127.0.0.1:0", "work,missing"));
   CHECK_FALSE(plan.has_value());
+
+  // A subset that parses to nothing must not silently widen to the whole pool.
+  auto const empty =
+      qoderz::cli::plan_serve(context, listen_and_accounts("http://127.0.0.1:0", ","));
+  CHECK_FALSE(empty.has_value());
+  CHECK(empty.error().m_kind == qoderz::error_kind::bad_request);
 }
 
 TEST_CASE("a pinned pool reports the pinned mode", "[cli][integration]") {
@@ -504,6 +510,33 @@ TEST_CASE("serve rejects an https listen address and a bad thread count", "[cli]
   cli_run bodies{{"serve", "--listen", "http://127.0.0.1:0", "--max-body-bytes", "many"},
                  fixture.env()};
   CHECK(bodies() == 1);
+}
+
+TEST_CASE("an explicit API key outranks QODERZ_API_KEY", "[cli][integration]") {
+  serve_fixture fixture;
+  fixture.store({make_account("work")});
+
+  auto env = fixture.env();
+  env["QODERZ_API_KEY"] = "env-key-not-real";
+  cli_run run{{"serve"}, env};
+  qoderz::cli::command_context context{.m_app = run.m_context,
+                                       .m_env = qoderz::cli::read_env(env),
+                                       .m_cli = qoderz::cli::make_global_options({})};
+
+  // §10 of `docs/design/cli.md`: command line > environment, so a key on the command line wins
+  // over QODERZ_API_KEY instead of being reported as a conflicting source.
+  auto options = listen_on("http://127.0.0.1:0");
+  options.m_api_key = "cli-key-not-real";
+  auto const planned = qoderz::cli::plan_serve(context, options);
+  REQUIRE(planned.has_value());
+  REQUIRE(planned->m_config.m_api_key.has_value());
+  CHECK(*planned->m_config.m_api_key == "cli-key-not-real");
+
+  auto conflicting = options;
+  conflicting.m_api_key_stdin = true;
+  auto const refused = qoderz::cli::plan_serve(context, conflicting);
+  CHECK_FALSE(refused.has_value());
+  CHECK(refused.error().m_kind == qoderz::error_kind::bad_request);
 }
 
 TEST_CASE("the serve startup summary goes to stderr and JSON to stdout", "[cli][integration]") {

@@ -338,6 +338,52 @@ TEST_CASE("an unknown command and a --json on a plain command are usage errors",
   CHECK(json_on_use() == 2);
 }
 
+TEST_CASE("a parse error never echoes a credential value", "[cli][commands]") {
+  store_fixture fixture;
+
+  // CLI11 echoes the arguments it rejected, so a mistyped PAT flag used to print the PAT itself.
+  cli_run pat{{"login", "--pat-stdn", "fake-pat-not-real"}, fixture.env()};
+  CHECK(pat() == 2);
+  CHECK(pat.m_err.str().find("fake-pat-not-real") == std::string::npos);
+  CHECK(pat.m_err.str().find("--pat-stdn") != std::string::npos);
+  CHECK(pat.m_err.str().find("***") != std::string::npos);
+
+  cli_run api_key{{"login", "--api-kee", "fake-key-not-real"}, fixture.env()};
+  CHECK(api_key() == 2);
+  CHECK(api_key.m_err.str().find("fake-key-not-real") == std::string::npos);
+  CHECK(api_key.m_err.str().find("--api-kee") != std::string::npos);
+
+  // The `--flag=value` spelling loses only the value.
+  cli_run joined{{"login", "--pat-stdn=fake-pat-not-real"}, fixture.env()};
+  CHECK(joined() == 2);
+  CHECK(joined.m_err.str().find("fake-pat-not-real") == std::string::npos);
+  CHECK(joined.m_err.str().find("--pat-stdn=") != std::string::npos);
+
+  // Redaction stops at the credential value; the rest of the message still has to be useful.
+  cli_run unknown{{"nope"}, fixture.env()};
+  CHECK(unknown() == 2);
+  CHECK(unknown.m_err.str().find("nope") != std::string::npos);
+}
+
+TEST_CASE("help resolves a nested subcommand instead of failing", "[cli][commands]") {
+  store_fixture fixture;
+
+  cli_run nested{{"help", "account"}, fixture.env()};
+  CHECK(nested() == 0);
+  CHECK(nested.m_out.str().find("use") != std::string::npos);
+
+  // `account use --help` used to throw `use not found` out of CLI11, because the deepest
+  // subcommand name was looked up on the root app instead of the app that owns it.
+  cli_run nested_flag{{"account", "use", "--help"}, fixture.env()};
+  CHECK(nested_flag() == 0);
+  CHECK(nested_flag.m_out.str().find("Set the default account") != std::string::npos);
+  CHECK(nested_flag.m_err.str().empty());
+
+  cli_run missing{{"help", "nope"}, fixture.env()};
+  CHECK(missing() == 2);
+  CHECK(missing.m_err.str().find("unknown command") != std::string::npos);
+}
+
 TEST_CASE("version, help and no command all exit zero", "[cli][commands]") {
   store_fixture fixture;
 

@@ -69,12 +69,10 @@ one_account(config::credential_file const& file, std::string_view site, std::str
 
 result<std::optional<std::string>> resolve_api_key(serve_options const& options,
                                                    env_options const& env, app_context& app) {
-  auto const sources = static_cast<int>(!options.m_api_key.empty()) +
-                       static_cast<int>(options.m_api_key_stdin) +
-                       static_cast<int>(env.m_api_key.has_value());
-  if (sources > 1) {
-    return std::unexpected(
-        bad_request_error("use only one of --api-key, --api-key-stdin and QODERZ_API_KEY"));
+  // §10 of `docs/design/cli.md`: the command line outranks the environment, so only the two
+  // flags are mutually exclusive. `QODERZ_API_KEY` is a fallback like `QODERZ_PAT`.
+  if (!options.m_api_key.empty() && options.m_api_key_stdin) {
+    return std::unexpected(bad_request_error("--api-key and --api-key-stdin cannot be combined"));
   }
   if (!options.m_api_key.empty()) {
     auto const trimmed = strings::trim(options.m_api_key);
@@ -127,8 +125,14 @@ result<serve_plan> plan_serve(command_context& context, serve_options const& opt
     return std::unexpected(configuration_error("not signed in; run: qoderz login"));
   }
 
+  // `--accounts ","` names no account at all; falling through to the whole pool would
+  // silently widen a subset the operator asked for, so it is a usage error instead.
+  bool const accounts_given = !options.m_accounts.empty();
   auto const selectors = split_selectors(options.m_accounts);
-  if (!options.m_account.empty() && !selectors.empty()) {
+  if (accounts_given && selectors.empty()) {
+    return std::unexpected(bad_request_error("--accounts needs at least one account name"));
+  }
+  if (!options.m_account.empty() && accounts_given) {
     return std::unexpected(bad_request_error("--account and --accounts are mutually exclusive"));
   }
 

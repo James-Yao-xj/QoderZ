@@ -13,6 +13,7 @@
 #include "config/credentials.hpp"
 
 #include <CLI/CLI.hpp>
+#include <cstddef>
 #include <exception>
 #include <optional>
 #include <string>
@@ -79,8 +80,58 @@ int print_overview(app_context& context, command_context& command) {
   return code_of(exit_code::success);
 }
 
+/// True when `word` opens with an option whose value must never be echoed back.
+bool is_secret_option(std::string_view word) {
+  // The prefixes stop one character short of the real options (`--pat`, `--api-key`) so a mistyped
+  // flag, such as `--pat-stdn` or `--api-kee`, still matches and its value is hidden.
+  constexpr std::string_view prefixes[] = {"--pat", "--api-k"};
+
+  for (auto const prefix : prefixes) {
+    if (word.starts_with(prefix)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// Replaces the value that follows a credential-bearing option with `***`.
+/// CLI11 echoes unrecognised arguments, so `--pat-stdn secret` would otherwise put the secret on
+/// stderr. Words are split on whitespace and rejoined with their original separators; a word such
+/// as `--pat=secret` keeps the option and loses only the value.
+std::string redact_secret_values(std::string const& message) {
+  constexpr std::string_view whitespace = " \t\n\r\f\v";
+  std::string redacted;
+  redacted.reserve(message.size());
+  bool hide_next_word = false;
+  std::size_t pos = 0;
+  while (pos < message.size()) {
+    auto const word_end = message.find_first_of(whitespace, pos);
+    auto const stop = word_end == std::string::npos ? message.size() : word_end;
+    std::string_view const word{message.data() + pos, stop - pos};
+    if (hide_next_word) {
+      redacted.append("***");
+      hide_next_word = false;
+    } else if (is_secret_option(word)) {
+      auto const equals = word.find('=');
+      if (equals == std::string_view::npos) {
+        redacted.append(word);
+        hide_next_word = true;
+      } else {
+        redacted.append(word.substr(0, equals + 1)).append("***");
+      }
+    } else {
+      redacted.append(word);
+    }
+    auto const next = message.find_first_not_of(whitespace, stop);
+    auto const gap_end = next == std::string::npos ? message.size() : next;
+    redacted.append(message, stop, gap_end - stop);
+    pos = gap_end;
+  }
+  return redacted;
+}
+
 int report_parse_error(app_context& context, CLI::App const& app, CLI::Error const& failure) {
-  context.m_err << "error: " << failure.what() << '\n';
+  context.m_err << "error: " << redact_secret_values(failure.what()) << '\n';
   context.m_err << "usage: " << app.get_name() << " <command> [options]; run: " << app.get_name()
                 << " help\n";
   context.m_err.flush();
@@ -133,11 +184,15 @@ std::string examples_of(std::string const& command) {
 
 int run_help(app_context& context, CLI::App& app, std::string const& command) {
   if (command.empty()) {
-    context.m_out << app.help() << usage_footer();
+    // `app.help()` would delegate to the selected `help` subcommand and print that instead,
+    // so the root help goes through the formatter directly.
+    context.m_out << app.get_formatter()->make_help(&app, app.get_name(),
+                                                    CLI::AppFormatMode::Normal)
+                  << usage_footer();
     context.m_out.flush();
     return code_of(exit_code::success);
   }
-  auto const* sub = app.get_subcommand(command);
+  auto const* sub = app.get_subcommand_no_throw(command);
   if (sub == nullptr) {
     context.m_err << "error: unknown command '" << command << "'\n";
     context.m_err << "usage: " << app.get_name() << " <command> [options]\n";
@@ -150,7 +205,9 @@ int run_help(app_context& context, CLI::App& app, std::string const& command) {
 }
 
 /// The deepest subcommand that was named, used to pick the help a failed `--help` should show.
-std::string active_command(CLI::App const& app) {
+/// Returns `&app` when no subcommand was named, so a nested command such as `account use`
+/// resolves to its own help instead of a top-level lookup that would throw.
+CLI::App const* active_command(CLI::App const& app) {
   CLI::App const* current = &app;
   for (;;) {
     CLI::App const* next = nullptr;
@@ -160,11 +217,10 @@ std::string active_command(CLI::App const& app) {
       }
     }
     if (next == nullptr) {
-      break;
+      return current;
     }
     current = next;
   }
-  return current == &app ? std::string{} : current->get_name();
 }
 
 } // namespace
@@ -294,12 +350,13 @@ int run(app_context& context) {
   try {
     app.parse(std::move(reversed));
   } catch (CLI::CallForHelp const&) {
-    auto const command = active_command(app);
-    if (command.empty()) {
-      context.m_out << app.help() << usage_footer();
+    auto const* command = active_command(app);
+    if (command == &app) {
+      context.m_out << app.get_formatter()->make_help(&app, app.get_name(),
+                                                      CLI::AppFormatMode::Normal)
+                    << usage_footer();
     } else {
-      auto const* sub = app.get_subcommand(command);
-      context.m_out << sub->help() << examples_of(sub->get_name()) << usage_footer();
+      context.m_out << command->help() << examples_of(command->get_name()) << usage_footer();
     }
     context.m_out.flush();
     return code_of(exit_code::success);
