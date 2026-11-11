@@ -12,7 +12,20 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
   message(FATAL_ERROR "qoderz requires GCC 14 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
 endif()
+# --- Build speed -------------------------------------------------------------
+# GCC's "-fmodules-ts" dependency scanner makes every compile uncacheable for
+# ccache (it reports "Unsupported compiler option") and doubles the work per
+# translation unit. QoderZ does not use C++20 modules, so the scanner only costs
+# time here.
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF CACHE BOOL "Skip C++ module dependency scanning")
 
+find_program(QODERZ_CCACHE ccache)
+if(QODERZ_CCACHE)
+  set(CMAKE_CXX_COMPILER_LAUNCHER "${QODERZ_CCACHE}" CACHE STRING "Compiler launcher")
+  message(STATUS "qoderz: compiling through ccache (${QODERZ_CCACHE})")
+else()
+  message(STATUS "qoderz: ccache not found; compiling directly")
+endif()
 find_package(Boost 1.83 REQUIRED CONFIG COMPONENTS url)
 find_package(OpenSSL REQUIRED)
 find_package(nlohmann_json 3.11 REQUIRED)

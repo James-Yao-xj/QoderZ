@@ -84,6 +84,8 @@
             cli11
             catch2_3
             clang-tools
+            ccache
+
             gdb
             curl
             jq
@@ -93,6 +95,14 @@
             export CC="${pkgs.gcc14}/bin/gcc"
             export CXX="${pkgs.gcc14}/bin/g++"
             echo "qoderz dev shell: $($CXX -dumpfullversion) / cmake $(cmake --version | head -n1 | cut -d' ' -f3)"
+            # A cold build of the tree takes a few minutes; ccache turns the
+            # repeat cost into seconds. Keep the cache bounded so it cannot
+            # crowd out the rest of the user's home directory.
+            export CCACHE_DIR="''${CCACHE_DIR:-$PWD/.ccache}"
+            export CCACHE_MAXSIZE="''${CCACHE_MAXSIZE:-5G}"
+            export CCACHE_COMPRESS="''${CCACHE_COMPRESS:-true}"
+            export CCACHE_BASEDIR="''${CCACHE_BASEDIR:-$PWD}"
+            export CCACHE_NOHASHDIR=1
           '';
         };
       });

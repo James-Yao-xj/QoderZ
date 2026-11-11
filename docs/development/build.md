@@ -44,6 +44,13 @@ nix develop --command cmake --build build
 nix develop --command ctest --test-dir build --output-on-failure
 ```
 
+`scripts/build.sh` 把上面三步的配置与构建合起来，并按机器的核数和内存挑一个安全的并行度：
+
+```sh
+scripts/build.sh              # 配置并构建 build/
+scripts/build.sh build-fast    # 换一个构建目录
+```
+
 要点：
 
 - 构建目录固定为 `build/`，源码树保持干净。
@@ -51,6 +58,36 @@ nix develop --command ctest --test-dir build --output-on-failure
 - `CMakeLists.txt` 会把 `project(qoderz VERSION ...)` 写入 `build/generated/common/version.hpp`。这个文件由构建系统生成，不要手改，也不要提交。
 - `CMAKE_EXPORT_COMPILE_COMMANDS=ON`，`build/compile_commands.json` 可供 clangd 使用。
 
+### 构建速度
+
+一次冷构建约一分钟，其中大半时间花在 `src/common/net/detail/connection.cpp`：它把 Beast 的
+HTTP 模板对明文和 TLS 两种 stream 各实例化一遍，单独一个编译单元就要 70 秒左右，
+因此它是整个构建的关键路径，再高的并行度也压不下去。
+
+`CMakeLists.txt` 为此做了两件事：
+
+- 关闭 GCC 的 C++ 模块依赖扫描（`CMAKE_CXX_SCAN_FOR_MODULES=OFF`）。项目不使用 C++20 模块，
+  而 `-fmodules-ts` 会让 ccache 把每一次编译判为不可缓存（"Unsupported compiler option"），
+  顺带每个编译单元还要多跑一遍扫描。关掉之后可缓存率从 0% 升到 90% 以上。
+- 自动探测 `ccache` 并用 `CMAKE_CXX_COMPILER_LAUNCHER` 接上。缓存目录在代码树的
+  `.ccache/`，上限由 devShell 的 `CCACHE_MAXSIZE` 控制（默认 5 GiB）。
+
+实测（28 核 / 13 GiB 内存的机器）：
+
+| 场景 | 关扫描前 | 关扫描 + ccache |
+| --- | --- | --- |
+| 冷构建 | 81 s | 66 s |
+| 清空产物后重建 | 75 s | 18 s |
+| 改一个头文件 | 30 s+ | 22 s |
+
+### 并行度与内存
+
+一个 Beast 编译单元的峰值常驻内存接近 1 GiB，`-j8` 在 13 GiB 的机器上会摸到尖峰并开始换页。
+`scripts/build.sh` 因此取两个上限的较小值：每个编译单元 1 GiB、总编译器内存不超过 6 GiB；
+同时给系统留 2 个核（核数大于 4 时）。默认结果是 `-j6` 左右。
+
+需要手动控制时，直接给 `cmake --build build --parallel N`；N 不要超过 `内存 GiB 数` 的一半，
+否则容易 OOM。
 运行：
 
 ```sh

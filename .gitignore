@@ -5,6 +5,9 @@
 /result-*
 compile_commands.json
 
+# 编译缓存（ccache）
+/.ccache/
+
 # Nix / direnv
 .direnv/
 .cache/
