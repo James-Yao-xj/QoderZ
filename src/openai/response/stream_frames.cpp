@@ -19,8 +19,6 @@ constexpr std::string_view frame_terminator = "\n\n";
 constexpr std::string_view done_frame = "data: [DONE]\n\n";
 constexpr std::string_view stop_reason = "stop";
 constexpr std::string_view error_type = "qoder_error";
-constexpr std::string_view fallback_error_message = "Qoder returned an error.";
-constexpr int fallback_error_status = 502;
 
 int frame_index(protocol::chat_event const& event) noexcept {
   return event.m_index > 0 ? event.m_index : 0;
@@ -93,10 +91,13 @@ void stream_translator::append_role_frame(std::vector<std::string>& frames) {
 
 std::string stream_translator::error_frame(protocol::chat_event const& event) const {
   auto const error = detail::error_of(event);
-  auto const status = error.m_http_status > 0 ? error.m_http_status : fallback_error_status;
+  // No fallback is needed: `qoder::from_status` always classifies into a positive status and a
+  // non-empty message (an unknown status becomes 502, a blank message becomes the status sentence),
+  // so the branches that guarded those two fields could never run.
+  auto const status = error.m_http_status;
 
   ordered_json body = ordered_json::object();
-  body["message"] = error.m_message.empty() ? std::string{fallback_error_message} : error.m_message;
+  body["message"] = error.m_message;
   body["type"] = error_type;
   body["code"] = status;
 

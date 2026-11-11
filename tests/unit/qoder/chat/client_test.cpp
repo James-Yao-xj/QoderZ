@@ -211,8 +211,8 @@ TEST_CASE("the stream survives a chunked body", "[qoder][chat][client]") {
   response.m_status = 200;
   response.m_chunked = true;
   auto const whole = success_stream();
-  // The stub writes a chunk length as decimal digits, which HTTP reads as hex, so every chunk here
-  // stays under ten bytes and the two spellings agree.
+  // Nine-byte chunks keep the body split across reads without depending on how the stub spells a
+  // chunk length; the wider chunks are covered by the http_client case.
   for (std::size_t offset = 0; offset < whole.size(); offset += 9) {
     response.m_chunks.push_back(whole.substr(offset, 9));
   }
@@ -231,6 +231,45 @@ TEST_CASE("the stream survives a chunked body", "[qoder][chat][client]") {
   CHECK(kinds_of(outcome->value().m_events) == std::vector<chat_event_kind>{chat_event_kind::text,
                                                                             chat_event_kind::text,
                                                                             chat_event_kind::stop});
+}
+
+TEST_CASE("the stream survives chunks wider than one hex digit", "[qoder][chat][client]") {
+  asio::io_context io;
+  scripted_stub stub;
+  stub_response response;
+  response.m_status = 200;
+  response.m_chunked = true;
+  auto const whole = success_stream();
+  // A chunk of ten bytes or more is spelled with two hex digits, so this is the width where a stub
+  // that wrote the length as decimal would corrupt the body; the stream has to reassemble it.
+  constexpr std::size_t chunk_size = 32;
+  for (std::size_t offset = 0; offset < whole.size(); offset += chunk_size) {
+    response.m_chunks.push_back(whole.substr(offset, chunk_size));
+  }
+  stub.m_answers.push_back(response);
+  auto server = stub.make(io);
+  REQUIRE(server.start().has_value());
+
+  qoderz::net::http_client http{io};
+  passthrough_wrapper wrapper;
+  fake_clock time;
+  chat_client client{http, wrapper, time, retry_options{}};
+
+  auto outcome = run_awaitable(io, open_and_drain(client, make_request(server)));
+  REQUIRE(outcome.has_value());
+  REQUIRE(outcome->has_value());
+  auto const& events = outcome->value().m_events;
+  REQUIRE(kinds_of(events) == std::vector<chat_event_kind>{chat_event_kind::text,
+                                                           chat_event_kind::text,
+                                                           chat_event_kind::stop});
+  // The body arrived in pieces, so the reassembled text is what proves the chunk framing survived.
+  std::string reassembled;
+  for (auto const& event : events) {
+    reassembled.append(event.m_text);
+  }
+  CHECK(reassembled == "Hello world");
+  CHECK(events[2].m_reason == "stop");
+  CHECK(stub.m_requests.size() == 1);
 }
 
 TEST_CASE("a refused connection maps to upstream", "[qoder][chat][client]") {

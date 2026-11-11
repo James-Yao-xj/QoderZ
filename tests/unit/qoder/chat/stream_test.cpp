@@ -91,8 +91,30 @@ json content_chunk(std::string const& text) {
   return delta_chunk(json{{"content", text}});
 }
 
+/// One frame carrying several native calls at once, which is how the upstream packs the first
+/// fragments of parallel tool calls.
+json tool_calls_chunk(std::vector<json> calls) {
+  json array = json::array();
+  for (auto& call : calls) {
+    array.push_back(std::move(call));
+  }
+  return delta_chunk(json{{"tool_calls", std::move(array)}});
+}
+
 json tool_chunk(json call) {
-  return delta_chunk(json{{"tool_calls", json::array({std::move(call)})}});
+  return tool_calls_chunk({std::move(call)});
+}
+
+/// A JSON document nested exactly `levels` deep, used to walk the depth guard up to its boundary.
+std::string nested_object(std::size_t levels) {
+  std::string text;
+  for (std::size_t level = 0; level < levels; ++level) {
+    text.push_back('{');
+    text.append(R"("a":)");
+  }
+  text.append("0");
+  text.append(levels, '}');
+  return text;
 }
 
 constexpr std::string_view hello_text = "Hello";
@@ -287,7 +309,7 @@ TEST_CASE("lines that are not an envelope are ignored", "[qoder][chat][stream]")
 }
 
 TEST_CASE("an inner chunk that is not a usable object is skipped", "[qoder][chat][stream]") {
-  for (auto const inner :
+  for (auto const& inner :
        {std::string{"[]"}, std::string{"\"x\""}, std::string{"7"}, std::string{"null"},
         std::string{R"({"choices":[]})"}, std::string{R"({"choices":"no"})"},
         std::string{R"({"choices":{}})"}, std::string{R"({"no_choices":1})"}, std::string{"{"}}) {
@@ -298,6 +320,29 @@ TEST_CASE("an inner chunk that is not a usable object is skipped", "[qoder][chat
     CHECK(joined_text(events).empty());
     CHECK(only_stop(events).m_reason == "stop");
   }
+}
+
+TEST_CASE("nesting past the depth guard drops the whole frame", "[qoder][chat][stream]") {
+  // `exceeds_json_depth` allows a document 64 brackets deep and refuses the 65th, before nlohmann
+  // could recurse into it. The chunk root is one of those brackets, so padding nested 63 levels
+  // under it still parses and 64 levels is thrown away whole: no text, no error, only the stop EOF
+  // always produces.
+  auto const frame_with_padding = [](std::size_t padding_levels) {
+    json envelope;
+    envelope["statusCodeValue"] = 200;
+    envelope["body"] = R"({"choices":[{"index":0,"delta":{"content":"Hello"}}],"padding":)" +
+                       nested_object(padding_levels) + "}";
+    return line_of(envelope);
+  };
+
+  auto const accepted = parse_all(frame_with_padding(63));
+  CHECK(joined_text(accepted) == "Hello");
+  CHECK(only_stop(accepted).m_reason == "stop");
+
+  auto const dropped = parse_all(frame_with_padding(64));
+  CHECK(joined_text(dropped).empty());
+  CHECK(only_stop(dropped).m_reason == "stop");
+  CHECK(of_kind(dropped, chat_event_kind::error).empty());
 }
 
 TEST_CASE("only the first choice is read", "[qoder][chat][stream]") {
@@ -400,6 +445,49 @@ TEST_CASE("tool calls that start out of order still form separate calls", "[qode
   REQUIRE(arguments.size() == 1);
   CHECK(arguments.front().m_index == 0);
   CHECK(arguments.front().m_arguments == " ");
+}
+
+TEST_CASE("two native calls packed into one frame keep their own state", "[qoder][chat][stream]") {
+  json const first_start = json{{"index", 0},
+                                {"id", "call_first"},
+                                {"function", json{{"name", "read"}, {"arguments", R"({"path":)"}}}};
+  json const second_start =
+      json{{"index", 1},
+           {"id", "call_second"},
+           {"function", json{{"name", "write"}, {"arguments", R"({"path":)"}}}};
+
+  std::string stream;
+  stream.append(frame_of(tool_calls_chunk({first_start, second_start})));
+  // The second frame answers both calls in the opposite order, which only lands correctly when each
+  // upstream index keeps its own buffered arguments.
+  json const second_arguments = json{{"index", 1}, {"function", json{{"arguments", R"("b.go"})"}}}};
+  json const first_arguments = json{{"index", 0}, {"function", json{{"arguments", R"("a.go"})"}}}};
+  stream.append(frame_of(tool_calls_chunk({second_arguments, first_arguments})));
+
+  auto const events = parse_all(stream);
+  auto const starts = of_kind(events, chat_event_kind::tool_start);
+  REQUIRE(starts.size() == 2);
+
+  // The output index is the order the calls started in, which here is the order of the array; the
+  // upstream index only decides which state each later fragment belongs to.
+  CHECK(starts[0].m_index == 0);
+  CHECK(starts[0].m_id == "call_first");
+  CHECK(starts[0].m_name == "read");
+  CHECK(starts[0].m_arguments == R"({"path":)");
+  CHECK(starts[1].m_index == 1);
+  CHECK(starts[1].m_id == "call_second");
+  CHECK(starts[1].m_name == "write");
+  CHECK(starts[1].m_arguments == R"({"path":)");
+
+  auto const arguments = of_kind(events, chat_event_kind::tool_arguments);
+  REQUIRE(arguments.size() == 2);
+  CHECK(arguments[0].m_index == 1);
+  CHECK(arguments[0].m_arguments == R"("b.go"})");
+  CHECK(arguments[1].m_index == 0);
+  CHECK(arguments[1].m_arguments == R"("a.go"})");
+
+  CHECK(only_stop(events).m_reason == "tool_calls");
+  CHECK(of_kind(events, chat_event_kind::error).empty());
 }
 
 TEST_CASE("a repeated name is ignored and a late id does not rewrite the start",

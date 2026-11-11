@@ -2,7 +2,6 @@
 
 #include "common/log.hpp"
 #include "common/net/http_types.hpp"
-#include "common/strings.hpp"
 #include "qoder/chat/request.hpp"
 #include "qoder/chat/stream.hpp"
 #include "qoder/errors.hpp"
@@ -129,6 +128,13 @@ chat_client::open(upstream_request const& request) {
       if (!first) {
         co_return std::unexpected(std::move(first.error()));
       }
+      // Kept on purpose even though today it cannot be taken: `sse_chat_stream::next()` sets its
+      // end-of-stream flag when the body ends and only reports "nothing left" after `finish()` has
+      // produced the closing stop or error, so the first event of a live response is never absent.
+      // It is the correct answer if that EOF contract ever changes, and without it a stream that
+      // ended before its first event would fall through to the error peek below and dereference an
+      // empty optional. Returning the drained stream is what the caller already handles: the
+      // response is written as an empty completion.
       if (!first->has_value()) {
         co_return std::unique_ptr<chat_stream>{std::move(stream)};
       }
