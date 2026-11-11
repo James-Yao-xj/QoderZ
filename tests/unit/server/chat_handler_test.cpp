@@ -5,6 +5,31 @@ namespace {
 
 using namespace qoderz::test::chat;
 
+/// Drives one streaming request into a sink whose SSE head fails, and checks that the handler
+/// reports the failure without writing a frame or a body.
+void check_failed_head(qoderz::error failure, error_kind expected) {
+  fixture scope;
+  auto handler = scope.make_handler();
+  recording_sink sink;
+  sink.m_begin_failure = std::move(failure);
+
+  chat_http_request request;
+  request.m_body = body_of("ultimate", true);
+  request.m_session_id = "session-11";
+  request.m_stream = true;
+  auto outcome = run_awaitable(scope.m_io, handler.handle(request, sink));
+
+  REQUIRE(outcome.has_value());
+  REQUIRE_FALSE(outcome->has_value());
+  CHECK(outcome->error().m_kind == expected);
+  CHECK_FALSE(sink.m_started);
+  CHECK_FALSE(sink.m_streaming);
+  CHECK_FALSE(sink.m_ended);
+  CHECK(sink.m_frames.empty());
+  CHECK(sink.m_json_writes == 0);
+  CHECK(sink.m_json_status == 0);
+}
+
 } // namespace
 
 TEST_CASE("a stream fails over from a quota answer and sticks to the second account",
@@ -26,7 +51,8 @@ TEST_CASE("a stream fails over from a quota answer and sticks to the second acco
 
   CHECK(scope.chat_calls() == 2);
   CHECK(scope.m_health.is_cooling("qoder/ada"));
-  auto const bound = scope.m_affinity.bound("session-1", scope.m_clock.now_ms());
+  // §6.3 keys the binding by the derived session id of §4.1, not by the raw header.
+  auto const bound = scope.bound_account("session-1");
   REQUIRE(bound.has_value());
   CHECK(*bound == "qoder/bob");
 
@@ -50,6 +76,7 @@ TEST_CASE("a non-streaming request fails over and writes exactly one body", "[se
   CHECK_FALSE(done.sink().m_streaming);
   CHECK(done.sink().m_frames.empty());
   CHECK(done.sink().m_json_status == 200);
+  CHECK(done.sink().m_json_writes == 1);
   auto const document = json::parse(done.sink().m_json_body, nullptr, false);
   CHECK(document.at("object") == "chat.completion");
   CHECK(document.at("choices").at(0).at("message").at("content") == "Hello world");
@@ -185,4 +212,45 @@ TEST_CASE("a client that stops reading ends the request as canceled", "[server][
   CHECK(outcome->error().m_kind == error_kind::canceled);
   CHECK(sink.m_frames.size() == 1);
   CHECK_FALSE(sink.m_ended);
+
+  // Nothing was delivered, so the turn stays unanswered: the next request of the same session
+  // opens a turn instead of continuing one. Marking it earlier would hide a half-written answer.
+  auto replay = ask(scope, "ultimate", true, "session-10");
+  REQUIRE(replay.m_outcome.has_value());
+  REQUIRE(scope.chat_calls() == 2);
+  CHECK(scope.sent_body(1).at("business").at("stage") == "start");
+}
+
+TEST_CASE("a non-streaming upstream error keeps a real status", "[server][chat]") {
+  fixture scope;
+  // The first event is the answer, the second one fails: §5.4 drops the buffer, so the account is
+  // already fixed and the router still owns the status line.
+  scope.chat("ada", 200,
+             frame(R"({"choices":[{"index":0,"delta":{"content":"part"}}]})") +
+                 envelope(429, R"({"code":110,"message":"quota exhausted"})"));
+  auto const done = ask(scope, "ultimate", false, "session-12");
+
+  REQUIRE_FALSE(done.m_outcome.has_value());
+  CHECK(done.m_outcome.error().m_kind == error_kind::quota);
+  CHECK(qoderz::server::http_status_for(done.m_outcome.error()) == 429);
+  CHECK(done.m_outcome.error().m_message == "quota exhausted");
+
+  // No body was written, so the router can answer with the 429 instead of a 200 carrying an error
+  // document, which is what a buffered non-streaming error relies on.
+  CHECK_FALSE(done.sink().m_started);
+  CHECK(done.sink().m_json_writes == 0);
+  CHECK(done.sink().m_frames.empty());
+  CHECK(scope.chat_calls() == 1);
+}
+
+TEST_CASE("a failed SSE head ends the request before any frame", "[server][chat]") {
+  SECTION("the client went away") {
+    check_failed_head(qoderz::make_error(error_kind::canceled, "the client went away"),
+                      error_kind::canceled);
+  }
+
+  SECTION("the stream cannot be started") {
+    check_failed_head(qoderz::make_error(error_kind::upstream, "the stream did not start"),
+                      error_kind::upstream);
+  }
 }

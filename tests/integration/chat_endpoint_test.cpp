@@ -453,5 +453,9 @@ TEST_CASE("a VPC account reaches both endpoints through its own gateway host",
   REQUIRE(scope.chat_calls() == 1);
   auto const& sent = scope.m_upstream_state.m_chat_requests.at(0);
   CHECK(sent.m_target.starts_with(chat_path));
-  CHECK(scope.m_upstream_state.m_chat_requests.at(0).m_headers.size() > 0);
+  // A header count would hold for any request; the account that served it is what the VPC site
+  // must carry through the loopback override.
+  auto const* uid = qoderz::net::header_value(sent.m_headers, "Cosy-User");
+  REQUIRE(uid != nullptr);
+  CHECK(*uid == "uid-ada");
 }

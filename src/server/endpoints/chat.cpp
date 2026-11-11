@@ -5,11 +5,8 @@
 #include "openai/response/response.hpp"
 #include "openai/response/stream_frames.hpp"
 #include "protocol/sse/chat_event.hpp"
-#include "qoder/errors.hpp"
-#include "server/error_writer.hpp"
 
 #include <cstdint>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>

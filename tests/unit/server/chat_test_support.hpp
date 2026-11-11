@@ -33,6 +33,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -138,11 +139,15 @@ public:
   asio::awaitable<qoderz::result<void>> write_json(int status, std::string body) override {
     m_json_status = status;
     m_json_body = std::move(body);
+    ++m_json_writes;
     m_started = true;
     co_return qoderz::result<void>{};
   }
 
   asio::awaitable<qoderz::result<void>> begin_sse() override {
+    if (m_begin_failure.has_value()) {
+      co_return std::unexpected(*m_begin_failure);
+    }
     m_started = true;
     m_streaming = true;
     co_return qoderz::result<void>{};
@@ -162,11 +167,16 @@ public:
   }
 
   int m_json_status = 0;
+  /// How many complete JSON bodies were written: more than one is a double answer.
+  std::size_t m_json_writes = 0;
   std::string m_json_body;
   std::vector<std::string> m_frames;
   bool m_started = false;
   bool m_streaming = false;
   bool m_ended = false;
+  /// Forces `begin_sse()` to fail the way a dead socket does, so a case can check that nothing is
+  /// written after a head that never went out.
+  std::optional<qoderz::error> m_begin_failure;
   std::size_t m_break_after = static_cast<std::size_t>(-1);
 };
 
@@ -318,6 +328,32 @@ struct fixture {
   [[nodiscard]] std::size_t chat_calls() const { return m_upstream_state.m_chat_requests.size(); }
   [[nodiscard]] std::size_t listing_calls() const { return m_upstream_state.m_listing_calls; }
 
+  /// Which account served chat request `index`: the upstream sees only the credential's uid, so
+  /// that is the pool identity a case can assert against.
+  [[nodiscard]] std::string account_of(std::size_t index) const {
+    auto const& request = m_upstream_state.m_chat_requests.at(index);
+    auto const* uid = qoderz::net::header_value(request.m_headers, "Cosy-User");
+    return uid == nullptr ? std::string{} : std::string{*uid};
+  }
+
+  /// The pool key of the account that served chat request `index`: the stub identifies an
+  /// account by its credential uid, and the fixture's uids are `uid-` plus the account name.
+  [[nodiscard]] std::string served_key(std::size_t index) const {
+    auto const uid = account_of(index);
+    return uid.starts_with("uid-") ? m_pool->site_id() + "/" + uid.substr(4) : uid;
+  }
+
+  /// The affinity key of a request that carries only a header: §6.3 keys the table by the derived
+  /// session id of §4.1, and that branch of the derivation ignores every prompt field.
+  [[nodiscard]] std::string session_key(std::string_view header) const {
+    return m_sessions.make_session_id(header, std::nullopt, std::nullopt, "", "");
+  }
+
+  /// The account `header` is bound to, looked up by its derived id rather than by the header.
+  [[nodiscard]] std::optional<std::string> bound_account(std::string_view header) {
+    return m_affinity.bound(session_key(header), m_clock.now_ms());
+  }
+
   [[nodiscard]] json sent_body(std::size_t index) const {
     auto plain = qoderz::protocol::body_decode(m_upstream_state.m_chat_requests.at(index).m_body);
     REQUIRE(plain.has_value());
@@ -334,10 +370,11 @@ private:
   }
 };
 
-inline std::string body_of(std::string_view model, bool stream) {
+/// The smallest request the endpoint accepts: one user turn and the stream flag it reads.
+inline std::string body_of(std::string_view model, bool stream, std::string_view prompt = "Hello") {
   return json{{"model", model},
               {"stream", stream},
-              {"messages", json::array({json{{"role", "user"}, {"content", "Hello"}}})}}
+              {"messages", json::array({json{{"role", "user"}, {"content", prompt}}})}}
       .dump();
 }
 
@@ -375,10 +412,11 @@ struct exchange {
   std::unique_ptr<recording_sink> m_sink;
 };
 
-inline exchange ask(fixture& scope, std::string_view model, bool stream, std::string session = {}) {
+/// Runs one body through a fresh handler and keeps everything the sink recorded.
+inline exchange deliver(fixture& scope, std::string body, std::string session = {}) {
   auto handler = scope.make_handler();
   chat_http_request request;
-  request.m_body = body_of(model, stream);
+  request.m_body = std::move(body);
   request.m_session_id = std::move(session);
   request.m_stream = true;
 
@@ -387,6 +425,16 @@ inline exchange ask(fixture& scope, std::string_view model, bool stream, std::st
   REQUIRE(outcome.has_value());
   done.m_outcome = std::move(*outcome);
   return done;
+}
+
+inline exchange ask(fixture& scope, std::string_view model, bool stream, std::string session = {}) {
+  return deliver(scope, body_of(model, stream), std::move(session));
+}
+
+/// The same, with another first user turn: the fallback branch of §4.1 folds it into the id.
+inline exchange ask_prompt(fixture& scope, std::string_view model, bool stream,
+                           std::string_view prompt, std::string session = {}) {
+  return deliver(scope, body_of(model, stream, prompt), std::move(session));
 }
 
 inline void check_no_done_frame(std::vector<std::string> const& frames) {

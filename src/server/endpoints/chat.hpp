@@ -59,11 +59,14 @@ struct opened_upstream {
 ///
 /// A returned stream is final. Its first event is already read, so the account can no longer be
 /// swapped and every later failure belongs to the writer as an error frame.
+///
+/// `session_header` is the raw `X-Qoder2Api-Session` / `X-Session-Id` value. The affinity key of
+/// §6.3 is the derived session id of §4.1, which also covers a request that carries no header.
 [[nodiscard]] boost::asio::awaitable<result<opened_upstream>>
 open_upstream(account_pool& pool, qoder::catalog::catalog_service& catalog,
               qoder::auth::token_service& tokens, qoder::chat::chat_client& client,
               openai::selection::session_store& sessions, clock& time, json const& body,
-              std::string_view model, std::string_view session_id);
+              std::string_view model, std::string_view session_header);
 
 } // namespace detail
 

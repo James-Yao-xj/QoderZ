@@ -148,8 +148,17 @@ boost::asio::awaitable<result<opened_upstream>>
 open_upstream(account_pool& pool, qoder::catalog::catalog_service& catalog,
               qoder::auth::token_service& tokens, qoder::chat::chat_client& client,
               openai::selection::session_store& sessions, clock& time, json const& body,
-              std::string_view model, std::string_view session_id) {
-  auto const candidates = pool.candidates(session_id, true);
+              std::string_view model, std::string_view session_header) {
+  // §4.1 derives the session id from the header and the body alone, so it exists before a model is
+  // known: §6.3 then binds the account by the very value the request translation records in the
+  // task table. A blank header is no header — `make_session_id` trims it and falls through.
+  auto prepared =
+      openai::read_request(body, std::optional<std::string_view>{session_header}, sessions);
+  if (!prepared) {
+    co_return std::unexpected(std::move(prepared.error()));
+  }
+
+  auto const candidates = pool.candidates(prepared->m_session_id, true);
   if (candidates.empty()) {
     co_return std::unexpected(pool.no_candidates_error());
   }
@@ -165,13 +174,8 @@ open_upstream(account_pool& pool, qoder::catalog::catalog_service& catalog,
     co_return std::unexpected(bad_request_error(unknown_model_message(model)));
   }
 
-  std::optional<std::string_view> header;
-  if (!session_id.empty()) {
-    header = session_id;
-  }
-
   for (auto const& entry : ready) {
-    auto context = openai::prepare_request(body, header, entry.m_model, sessions, time);
+    auto context = openai::prepare_request(*prepared, entry.m_model, sessions, time);
     if (!context) {
       co_return std::unexpected(std::move(context.error()));
     }
@@ -198,7 +202,7 @@ open_upstream(account_pool& pool, qoder::catalog::catalog_service& catalog,
     }
 
     pool.report_success(entry.m_account->m_key);
-    pool.bind(session_id, entry.m_account->m_key);
+    pool.bind(prepared->m_session_id, entry.m_account->m_key);
 
     opened_upstream opened;
     opened.m_stream = std::move(*stream);

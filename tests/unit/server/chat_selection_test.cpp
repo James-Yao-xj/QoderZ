@@ -145,9 +145,9 @@ TEST_CASE("different sessions rotate while one session stays bound", "[server][c
   }
 
   REQUIRE(scope.m_affinity.size() == 3);
-  auto const one = scope.m_affinity.bound("one", scope.m_clock.now_ms());
-  auto const two = scope.m_affinity.bound("two", scope.m_clock.now_ms());
-  auto const three = scope.m_affinity.bound("three", scope.m_clock.now_ms());
+  auto const one = scope.bound_account("one");
+  auto const two = scope.bound_account("two");
+  auto const three = scope.bound_account("three");
   REQUIRE(one.has_value());
   REQUIRE(two.has_value());
   REQUIRE(three.has_value());
@@ -157,8 +157,58 @@ TEST_CASE("different sessions rotate while one session stays bound", "[server][c
   auto const before = scope.chat_calls();
   auto replay = ask(scope, "ultimate", true, "two");
   REQUIRE(replay.m_outcome.has_value());
-  auto const bound = scope.m_affinity.bound("two", scope.m_clock.now_ms());
+  auto const bound = scope.bound_account("two");
   REQUIRE(bound.has_value());
   CHECK(*bound == *two);
   CHECK(scope.chat_calls() == before + 1);
+}
+
+TEST_CASE("an anonymous request sticks to the account its prompt first used", "[server][chat]") {
+  fixture scope{{"ada", "bob"}};
+
+  // No session header at all: §4.1 falls back to the prompt, so §6.3 still has a key and the
+  // second request skips the rotation it would otherwise take.
+  auto const first = ask(scope, "ultimate", true);
+  REQUIRE(first.m_outcome.has_value());
+  auto const second = ask(scope, "ultimate", true);
+  REQUIRE(second.m_outcome.has_value());
+
+  REQUIRE(scope.chat_calls() == 2);
+  CHECK(scope.account_of(1) == scope.account_of(0));
+  CHECK(scope.m_affinity.size() == 1);
+}
+
+TEST_CASE("anonymous requests with different prompts do not share a binding", "[server][chat]") {
+  fixture scope{{"ada", "bob"}};
+
+  auto const hello = ask_prompt(scope, "ultimate", true, "Hello");
+  REQUIRE(hello.m_outcome.has_value());
+  auto const goodbye = ask_prompt(scope, "ultimate", true, "Goodbye");
+  REQUIRE(goodbye.m_outcome.has_value());
+  REQUIRE(scope.chat_calls() == 2);
+
+  // The fallback branch folds the prompt into the id, so two prompts are two sessions: binding
+  // them together would pin unrelated conversations to whichever account ran first.
+  CHECK(scope.m_affinity.size() == 2);
+
+  auto const replay = ask_prompt(scope, "ultimate", true, "Hello");
+  REQUIRE(replay.m_outcome.has_value());
+  CHECK(scope.account_of(2) == scope.account_of(0));
+}
+
+TEST_CASE("a session header outranks the prompt in the affinity key", "[server][chat]") {
+  fixture scope{{"ada", "bob"}};
+
+  auto const first = ask_prompt(scope, "ultimate", true, "Hello", "session-h");
+  REQUIRE(first.m_outcome.has_value());
+  auto const second = ask_prompt(scope, "ultimate", true, "Another prompt", "session-h");
+  REQUIRE(second.m_outcome.has_value());
+  REQUIRE(scope.chat_calls() == 2);
+
+  // One header, two prompts, one account: the named branch of §4.1 never reads the messages.
+  CHECK(scope.account_of(1) == scope.account_of(0));
+  CHECK(scope.m_affinity.size() == 1);
+  auto const bound = scope.bound_account("session-h");
+  REQUIRE(bound.has_value());
+  CHECK(*bound == scope.served_key(0));
 }

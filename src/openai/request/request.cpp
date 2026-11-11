@@ -172,48 +172,66 @@ std::string build_system_text(json const& messages, bool include_tools,
 
 } // namespace
 
-result<request_context> prepare_request(json const& body,
-                                        std::optional<std::string_view> session_header,
-                                        qoder::catalog::model_info const& model,
-                                        selection::session_store& sessions, clock& time) {
+result<prepared_request> read_request(json const& body,
+                                      std::optional<std::string_view> session_header,
+                                      selection::session_store const& sessions) {
   auto const messages = body.find("messages");
   if (messages == body.end() || !messages->is_array()) {
     return std::unexpected(bad_request_error("messages is required"));
   }
 
   auto const tool_choice = read_tool_choice(body);
-  auto tools = read_tools(body);
-  auto const include_tools = !tools.empty() && tool_choice != "none";
-  auto const system_text = build_system_text(*messages, include_tools, tool_choice);
+
+  prepared_request prepared;
+  prepared.m_tools = read_tools(body);
+  prepared.m_include_tools = !prepared.m_tools.empty() && tool_choice != "none";
+  prepared.m_system_text = build_system_text(*messages, prepared.m_include_tools, tool_choice);
 
   auto dialog = normalize_messages(*messages);
   if (!dialog.has_value()) {
     return std::unexpected(std::move(dialog.error()));
   }
+  prepared.m_dialog = std::move(*dialog);
 
   auto const cache_key = read_trimmed_string(body, "prompt_cache_key");
   auto const user = read_trimmed_string(body, "user");
-  auto const requested_effort = read_trimmed_string(body, "reasoning_effort");
+  prepared.m_session_id = sessions.make_session_id(
+      session_header, cache_key, user, prepared.m_system_text, prepared.m_dialog.m_first_user_text);
 
+  prepared.m_requested_effort = read_trimmed_string(body, "reasoning_effort");
+  prepared.m_max_tokens = read_max_tokens(body);
+  return prepared;
+}
+
+result<request_context> prepare_request(prepared_request const& prepared,
+                                        qoder::catalog::model_info const& model,
+                                        selection::session_store& sessions, clock& time) {
   request_context context;
   context.m_model = model;
-  context.m_system_text = system_text;
+  context.m_system_text = prepared.m_system_text;
+  context.m_session_id = prepared.m_session_id;
 
-  auto const session_id = sessions.make_session_id(
-      session_header, cache_key, user, context.m_system_text, dialog->m_first_user_text);
-  context.m_session_id = session_id;
-
-  auto const effort = selection::select_effort(model, requested_effort);
+  auto const effort = selection::select_effort(model, prepared.m_requested_effort);
   context.m_enable_thinking = effort.m_enable_thinking;
   context.m_reasoning_effort = effort.m_effort;
-  context.m_max_tokens = read_max_tokens(body);
-  context.m_tools = std::move(tools);
-  context.m_include_tools = include_tools;
-  context.m_messages = std::move(dialog->m_messages);
-  context.m_task = sessions.get_or_create(session_id, dialog->m_last_user_index,
-                                          dialog->m_last_user_text, time.now_ms());
+  context.m_max_tokens = prepared.m_max_tokens;
+  context.m_tools = prepared.m_tools;
+  context.m_include_tools = prepared.m_include_tools;
+  context.m_messages = prepared.m_dialog.m_messages;
+  context.m_task = sessions.get_or_create(context.m_session_id, prepared.m_dialog.m_last_user_index,
+                                          prepared.m_dialog.m_last_user_text, time.now_ms());
   context.m_request_id = selection::make_uuid();
   return context;
 }
 
+result<request_context> prepare_request(json const& body,
+                                        std::optional<std::string_view> session_header,
+                                        qoder::catalog::model_info const& model,
+                                        selection::session_store& sessions, clock& time) {
+  auto prepared = read_request(body, session_header, sessions);
+  if (!prepared) {
+    return std::unexpected(std::move(prepared.error()));
+  }
+  return prepare_request(*prepared, model, sessions, time);
+}
 } // namespace qoderz::openai
