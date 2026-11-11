@@ -62,6 +62,10 @@ bool connection_writer::started() const noexcept {
   return m_started;
 }
 
+bool connection_writer::reusable() const noexcept {
+  return m_keep_alive && !m_streamed;
+}
+
 bool connection_writer::streaming() const noexcept {
   return m_streaming;
 }
@@ -102,6 +106,7 @@ boost::asio::awaitable<result<void>> connection_writer::begin_sse() {
   }
   m_started = true;
   m_streaming = true;
+  m_streamed = true;
   co_return result<void>{};
 }
 

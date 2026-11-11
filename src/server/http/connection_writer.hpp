@@ -39,8 +39,11 @@ public:
   ~connection_writer() override = default;
 
   [[nodiscard]] bool started() const noexcept override;
-  [[nodiscard]] bool streaming() const noexcept;
+  [[nodiscard]] bool reusable() const noexcept override;
 
+  /// Whether frames may still be written, which is false again once `end_sse()` ran. Only this
+  /// class needs that answer; a caller that wants to know about the connection asks `reusable()`.
+  [[nodiscard]] bool streaming() const noexcept;
   boost::asio::awaitable<result<void>> write_json(int status, std::string body) override;
   boost::asio::awaitable<result<void>> begin_sse() override;
   boost::asio::awaitable<result<void>> write_sse(std::string_view frame) override;
@@ -52,6 +55,9 @@ private:
   bool m_keep_alive;
   bool m_started = false;
   bool m_streaming = false;
+  /// Set by `begin_sse()` and never cleared: the head already promised `Connection: close`, so the
+  /// connection stays spent even after the last chunk went out.
+  bool m_streamed = false;
 };
 
 } // namespace qoderz::server

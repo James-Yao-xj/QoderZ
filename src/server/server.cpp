@@ -44,7 +44,6 @@ using tcp = asio::ip::tcp;
 
 constexpr std::string_view request_too_large_message =
     "the request body is larger than the server accepts";
-constexpr std::string_view request_too_large_code = "request_too_large";
 constexpr std::string_view unparsable_message = "the request could not be parsed";
 constexpr std::string_view invalid_key_message = "invalid API key";
 
@@ -133,12 +132,21 @@ std::size_t session_count(server::state& self) {
   return self.m_sessions.size();
 }
 
+/// Closes the listening socket and cancels a pending accept, which is what makes `run` return.
+/// The destructor calls this directly: a `stop()` posted to a context that already stopped would
+/// never run, and `accept` is the only operation blocked there. It is also the one socket step that
+/// does not need the io_context: closing wakes the accept handler with `operation_aborted`.
+void close_acceptor(server::state& self) {
+  beast::error_code ignored;
+  self.m_acceptor.close(ignored);
+}
+
 /// Stops the accept loop and wakes the connections that are only waiting for their next request.
 /// A connection with a request in flight keeps its socket: §7 gives it the grace period, and only
 /// `drain` may cut it off.
 void stop_accepting(server::state& self) {
   beast::error_code ignored;
-  self.m_acceptor.close(ignored);
+  close_acceptor(self);
 
   std::vector<session_ptr> idle;
   {
@@ -213,7 +221,9 @@ asio::awaitable<bool> handle_chat(server::state& self,
 
   auto outcome = co_await self.m_deps.m_chat.handle(chat, writer);
   if (outcome) {
-    co_return keep_alive && !writer.streaming();
+    // The sink owns the answer: an SSE head promised `Connection: close`, so the connection is
+    // spent even though the last chunk is already on the wire.
+    co_return writer.reusable();
   }
 
   auto failure = std::move(outcome.error());
@@ -293,8 +303,7 @@ asio::awaitable<void> serve_connection(std::shared_ptr<server::state> self, sess
       }
       if (ec == http::error::body_limit) {
         (void)co_await send_error(stream, parser.get().version(), false,
-                                  client_status_error(413, std::string{request_too_large_message},
-                                                      std::string{request_too_large_code}));
+                                  client_status_error(413, std::string{request_too_large_message}));
         co_return;
       }
       (void)co_await send_error(stream, parser.get().version(), false,
@@ -320,6 +329,9 @@ server::server(asio::io_context& io, server_config config, server_dependencies d
 
 server::~server() {
   m_state->m_stopping.store(true);
+  // The accept loop holds its own `state` reference, so it outlives this object; closing the
+  // listener here is what stops the port from staying bound.
+  close_acceptor(*m_state);
   close_all_sessions(*m_state);
 }
 
@@ -386,6 +398,7 @@ void server::stop() {
 
 boost::asio::awaitable<void> server::drain() {
   auto self = m_state;
+  close_acceptor(*self);
   auto const deadline = std::chrono::steady_clock::now() + shutdown_grace;
   while (session_count(*self) != 0) {
     if (std::chrono::steady_clock::now() >= deadline) {

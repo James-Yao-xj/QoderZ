@@ -41,10 +41,12 @@ public:
   /// call from a signal handler thread; in-flight requests keep their sockets.
   void stop();
 
-  /// Waits for in-flight requests, at most `shutdown_grace`, then closes whatever is left.
+  /// Closes the listener, waits for in-flight requests for at most `shutdown_grace`, then closes
+  /// whatever is left.
   ///
   /// This is the grace period of §7: the caller stops the acceptor, drains, and exits 0. A test
-  /// that does not want to wait simply never awaits it — the destructor closes the sockets instead.
+  /// that does not want to wait simply never awaits it — the destructor closes the listener and the
+  /// sockets instead.
   [[nodiscard]] boost::asio::awaitable<void> drain();
 
   /// The accept loop; returns when the acceptor is closed or fails.

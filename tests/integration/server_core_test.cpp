@@ -21,8 +21,10 @@
 #include <boost/beast/core/tcp_stream.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -250,6 +252,42 @@ TEST_CASE("a handler error after the stream started becomes one error frame",
   CHECK(outcome->m_body.find("[DONE]") == std::string::npos);
 }
 
+TEST_CASE("an SSE answer closes the connection even after its last chunk",
+          "[server][integration]") {
+  server_harness scope{fake_chat::mode::sse_ok};
+  // The first answer has to be a real one, otherwise a missing connection would look like a pass.
+  bool answered = false;
+  bool reused = false;
+  auto work = [&]() -> asio::awaitable<bool> {
+    auto executor = co_await asio::this_coro::executor;
+    beast::tcp_stream stream{executor};
+    beast::error_code ec;
+    stream.connect(asio::ip::tcp::endpoint{asio::ip::address_v4::loopback(), scope.m_port}, ec);
+    if (ec) {
+      co_return false;
+    }
+    beast::flat_buffer buffer;
+    auto streamed = co_await exchange(
+        stream, build_request("POST", "/v1/chat/completions", {}, R"({"stream":true})", true),
+        buffer);
+    if (!streamed.has_value()) {
+      co_return false;
+    }
+    answered = streamed->m_status == 200 && header_of(*streamed, "Connection") == "close";
+    // The head promised `Connection: close`, so the next request must find no connection at all.
+    auto after = co_await exchange(stream, build_request("GET", "/healthz", {}, {}, true), buffer);
+    reused = after.has_value();
+    beast::error_code ignored;
+    stream.socket().shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
+    co_return true;
+  };
+  auto ran = run_awaitable(scope.m_io, work());
+  REQUIRE(ran.has_value());
+  REQUIRE(*ran);
+  CHECK(answered);
+  CHECK_FALSE(reused);
+}
+
 TEST_CASE("two requests share one keep-alive connection", "[server][integration]") {
   server_harness scope;
   auto work = [&]() -> asio::awaitable<std::optional<http_result>> {
@@ -399,4 +437,47 @@ TEST_CASE("a canceled handler answer writes no body at all", "[server][integrati
   auto health = scope.request("GET", "/healthz");
   REQUIRE(health.has_value());
   CHECK(health->m_status == 200);
+}
+
+TEST_CASE("the destructor closes the listener", "[server][integration]") {
+  server_harness scope;
+  auto& io = scope.m_io;
+  fake_chat chat{fake_chat::mode::json_ok};
+
+  server_config config;
+  config.m_listen_host = "127.0.0.1";
+  config.m_port = 0;
+
+  auto listener = std::make_unique<server>(
+      io, std::move(config), server_dependencies{.m_chat = chat, .m_models = *scope.m_models});
+  auto started = listener->start();
+  REQUIRE(started.has_value());
+  auto const port = *started;
+  // The accept loop is what keeps a reference to the state, so it has to be running for the case to
+  // mean anything.
+  asio::co_spawn(io, listener->run(), asio::detached);
+  std::jthread pumping{[&io] { io.run(); }};
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+
+  listener.reset();
+  std::this_thread::sleep_for(std::chrono::milliseconds{50});
+
+  beast::error_code ec;
+  asio::ip::tcp::socket probe{io};
+  probe.connect(asio::ip::tcp::endpoint{asio::ip::address_v4::loopback(), port}, ec);
+  CHECK(ec);
+  beast::error_code ignored;
+  probe.close(ignored);
+
+  // Reuse address keeps the TIME_WAIT of the probe from deciding the answer, so a failed bind can
+  // only mean the listener is still open.
+  asio::ip::tcp::acceptor again{io};
+  beast::error_code bound;
+  again.open(asio::ip::tcp::v4(), bound);
+  again.set_option(asio::socket_base::reuse_address{true}, bound);
+  again.bind(asio::ip::tcp::endpoint{asio::ip::address_v4::loopback(), port}, bound);
+  CHECK_FALSE(bound);
+
+  io.stop();
+  pumping.join();
 }
