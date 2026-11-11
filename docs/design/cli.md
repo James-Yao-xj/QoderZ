@@ -44,7 +44,7 @@ qoderz login [--site <id>] [--name <name>] [--vpc <instance>]
              [--no-browser] [--replace] [--json]
 ```
 
-- 默认设备流；给了 `--pat` 或 `--pat-stdin` 则走 PAT；`--device` 强制设备流。
+- 默认设备流；给了 `--pat` 或 `--pat-stdin` 则走 PAT；`--device` 强制设备流，与两者互斥，此时 `QODERZ_PAT` 也被忽略。
 - `--pat` 与 `--pat-stdin` 互斥。`--pat-stdin` 从标准输入读一行，避免 `ps` 与 shell 历史；
   `QODERZ_PAT` 也可以提供 PAT，优先级低于显式旗标。
 - 站点默认取 `QODERZ_SITE`，再缺省 `qoder-cn`。输出会明确写出站点，避免“为什么登录到了 CN”。
@@ -142,14 +142,15 @@ qoderz usage  [--site <id>] [--account <selector>] [--json]
 qoderz serve [--listen <url>] [--site <id>]
              [--account <selector>] | [--accounts <selector>,...]
              [--api-key <key> | --api-key-stdin]
-             [--threads <n>] [--max-body-bytes <n>]
-             [--log-level <level>] [--json]
+             [--threads <n>] [--max-body-bytes <n>] [--ignore-cooldown]
+             [--allow-public] [--log-level <level>] [--json]
 ```
 
 - `--listen` 默认 `QODERZ_LISTEN` 或 `http://127.0.0.1:8788`；只支持 http（本地网关）。
 - 默认站点取 `--site`、`QODERZ_SITE`、`qoder-cn`。
-- 默认使用该站点**全部账户**作为池；`--account` 固定一个账户，禁用轮转与冷却过滤；
-  `--accounts a,b` 只使用指定账户（必须同站点）。三者互斥。
+- 默认使用该站点**全部账户**作为池；`--account` 固定一个账户、不再轮转（冷却仍然生效，
+  `--ignore-cooldown` 才让冷却中的账户继续参与）；`--accounts a,b` 只使用指定账户（必须同站点）。
+  `--account` 与 `--accounts` 互斥。
 - `--threads` 默认 `min(hardware_concurrency, 4)`，最少 1。
 - `--max-body-bytes` 默认 32 MiB；超过返回 413 OpenAI 错误体。
 - `--api-key` 也可用 `QODERZ_API_KEY`；`--api-key-stdin` 从标准输入读取。

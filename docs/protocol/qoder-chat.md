@@ -329,9 +329,9 @@ data: {"statusCodeValue":200,"body":"{\"choices\":[{\"index\":0,\"delta\":{\"too
 | --- | --- |
 | `protocol/body_codec` | BodyCodec 编解码、长度公式、固定向量 |
 | `protocol/cosy_signer` | AES/RSA/MD5 签名与 19 个头 |
-| `protocol/sse_line_reader` | 增量切行、16 MiB 上限、EOF 半行 |
-| `protocol/stream_parser` | 外壳 → 内层 chunk → chat_event |
-| `protocol/text_tool_splitter` | 文本工具调用增量拆分 |
+| `protocol/sse/line_reader` | 增量切行、16 MiB 上限、EOF 半行 |
+| `qoder/chat/stream`（`stream_parser`） | 外壳 → 内层 chunk → chat_event |
+| `protocol/sse/text_tool_splitter` | 文本工具调用增量拆分 |
 | `qoder/chat/request` | 请求 JSON 组装、窗口选择、会话/任务 |
 | `qoder/chat/client` | 发送、队列重试、首事件 peek |
 | `qoder/chat/stream` | 上游字节流 → chat_event |

@@ -33,49 +33,48 @@ src/
     error.hpp               error_kind / error / result
     log.hpp .cpp            level / logger
     json.hpp                nlohmann alias
+    clock.hpp .cpp          clock 抽象与系统时钟
+    strings.hpp             trim / 大小写 / 前缀
     codec/                  base64、hash、random
-    net/                    http_client、connection、tls
+    net/                    http_client、url、connection、connection_pool、tls
   protocol/
     body_codec.hpp .cpp
     cosy_signer.hpp .cpp
-    sse_line_reader.hpp .cpp
-    stream_parser.hpp .cpp
-    text_tool_splitter.hpp .cpp
-    chat_event.hpp
+    sse/                    line_reader、text_tool_splitter、chat_event
   config/
     site.hpp .cpp
     credentials.hpp .cpp
     accounts.hpp .cpp
     paths.hpp .cpp
   qoder/
-    auth/                   device、pat、token
-    catalog/                model、fallback、cache
+    auth/                   device、pat、token（support/ 放浏览器与 JSON HTTP）
+    catalog/                model、listing、parser、fallback、service
     usage/                  usage
-    chat/                   request、client、stream、session
+    chat/                   request、client、stream
     errors.hpp .cpp
   openai/
-    request.hpp .cpp
-    response.hpp .cpp
-    stream_frames.hpp .cpp
-    selectors.hpp .cpp
-    request_plan.hpp
+    request/                request（read_request / prepare_request）、body、normalize、types
+    response/               response、stream_frames
+    selection/              selectors、session
   server/
     server.hpp .cpp
     router.hpp .cpp
-    endpoints/              health、models、chat
-    pool/                   account_pool、health、affinity
-    api_key.hpp .cpp
+    config.hpp
+    api_key.hpp
     error_writer.hpp .cpp
+    endpoints/              health、models、chat、chat_select
+    http/                   chat_handler、connection_writer、response_sink
+    pool/                   account_pool、health、affinity
   cli/
     app.hpp .cpp
     options.hpp .cpp
     output.hpp .cpp
-    commands/               login、logout、accounts、models、usage、serve
+    commands/               account、login、models、usage、serve/
 tests/
   unit/<layer>/             与 src 同构
-  integration/              拉起 stub + serve 的端到端
-  support/                  stub_server、temp_dir、fixtures
-  stub_upstream/            独立的 loopback 假上游
+  integration/              进程内集成（server_core / chat_endpoint）与进程级端到端
+  support/                  stub_server、temp_dir、server_harness、fake_clock、async_test
+  stub_upstream/            独立的 loopback 假上游（qoderz_stub_upstream）
 ```
 
 单目录代码文件不超过 8 个；超过时按职责再分子目录。文件有效行目标 ≤600，超过需要理由。
@@ -86,7 +85,7 @@ tests/
 HTTP request
   │  server/router：鉴权、body 上限、按 path 分发
   ▼
-openai/request：校验 + 生成 request_plan（session id、task、消息、工具、窗口）
+openai/request：校验 + prepared_request（session id 先行）-> request_context（消息、工具、窗口）
   │
   ▼
 server/pool：按 session 粘滞选账户；pinned 时只有一个
@@ -95,7 +94,7 @@ server/pool：按 session 粘滞选账户；pinned 时只有一个
 qoder/chat/client：取新鲜 token -> 组装 JSON -> BodyCodec -> COSY 签名
   │                         └─ busy 时同一份 body/headers 重试
   ▼
-Qoder SSE ──► protocol/sse_line_reader ──► protocol/stream_parser ──► chat_event
+Qoder SSE ──► protocol/sse/line_reader ──► qoder/chat/stream ──► chat_event
   │
   ▼
 openai/response：chat_event -> OpenAI chunk / 完整 JSON
@@ -131,7 +130,7 @@ server：写 SSE 帧或 JSON；成功后 MarkAnswered
 - 上游连接复用：按 origin 维护空闲连接（上限小、TTL 短）；流式响应持有连接直到结束。
   连接失效时在“尚未写出任何响应”阶段换新连接重试一次。
 - 日志默认 info；请求级细节在 debug，SSE 帧在 trace。日志格式化不做无谓分配。
-- Release 构建开启 `-O2`/LTO；不做 `-march=native`，保证 nix 产物可移植。
+- Release 构建走 CMake 默认的 `-O3 -DNDEBUG`；不开启 LTO，也不做 `-march=native`，保证 nix 产物可移植。
 - 性能结论只报告实测：idle RSS/PSS、stub 负载下的 RSS/PSS、首字节延迟。测量脚本从外部
   发压，绝不在被测进程内造负载。
 
@@ -143,11 +142,11 @@ enum class error_kind {
 };
 
 struct error {
-  error_kind kind;
-  std::string message;
-  int http_status = 0;
-  std::string code;
-  std::optional<int> retry_after;
+  error_kind m_kind;
+  std::string m_message;
+  int m_http_status = 0;
+  std::string m_code;
+  std::optional<int> m_retry_after;
 };
 ```
 
@@ -173,7 +172,7 @@ struct error {
 ## 8. 安全
 
 - 默认只监听 loopback；非 loopback 且无 API key 时拒绝启动（可用 `--allow-public` 显式覆盖）。
-- API key 用常量时间比较；未配置 key 时接受任意非空 Bearer（与 OpenAI 客户端习惯一致）。
+- API key 用常量时间比较；未配置 key 时 `/v1/*` 接受任意请求（本机使用场景），`/healthz` 与 404 本来就不鉴权。
 - 凭据文件 0600、目录 0700、原子写；日志与 `--json` 绝不包含 token/PAT。
 - `QODERZ_UPSTREAM` 只接受 loopback，防止凭据外流。
 - 上游 TLS 验证系统 CA 与主机名；不提供关闭验证的开关。

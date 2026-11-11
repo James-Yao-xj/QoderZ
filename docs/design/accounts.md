@@ -192,4 +192,4 @@ VPC 账户可以共存；VPC 只影响主机解析。
 | `config/credentials` | 文件定位、解析、校验、原子写、缓存 |
 | `config/accounts` | 账户值类型、身份匹配、自动命名、默认与选择 |
 | `config/paths` | XDG / APPDATA / 目录创建 |
-| `cli/account_ops` | login/logout/accounts/use 的行为编排 |
+| `cli/commands/account`、`cli/commands/login` | login/logout/accounts/use 的行为编排 |

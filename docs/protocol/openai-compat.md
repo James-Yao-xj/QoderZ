@@ -524,10 +524,10 @@ data: [DONE]
 | 模块 | 职责 |
 | --- | --- |
 | `openai/request` | 字段读取、校验、system 合并、tools |
-| `openai/normalize` | 消息归一化、配对、图片外移、cache、contents |
-| `openai/session` | session id、turn key、任务 LRU |
-| `openai/selectors` | effort 与 window 选择 |
-| `openai/body` | Qoder 请求 JSON 序列化 |
-| `openai/response` | 非流式完整 JSON |
-| `openai/stream_frames` | 流式 SSE 帧 |
-| `protocol/text_tool_splitter` | 文本工具调用状态机 |
+| `openai/request/normalize` | 消息归一化、配对、图片外移、cache、contents |
+| `openai/selection/session` | session id、turn key、任务 LRU |
+| `openai/selection/selectors` | effort 与 window 选择 |
+| `openai/request/body` | Qoder 请求 JSON 序列化 |
+| `openai/response/response` | 非流式完整 JSON |
+| `openai/response/stream_frames` | 流式 SSE 帧 |
+| `protocol/sse/text_tool_splitter` | 文本工具调用状态机 |

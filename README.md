@@ -81,7 +81,7 @@ curl -s http://127.0.0.1:8788/v1/chat/completions \
 - 默认只监听 `127.0.0.1`；监听非 loopback 且没有 API key 时**拒绝启动**，确实要公开时必须显式 `--allow-public`，并强烈建议同时配置 key 与反向代理。
 - 凭据文件权限 0600；日志、错误体、`--json` 输出都不含 token、PAT、`Authorization`、`Cosy-*`、prompt 或图片字节。
 - 只做 HTTP/1.1，不终止 TLS、不提供关闭证书校验的开关；需要 TLS 时放在反向代理后面。
-- `QODERZ_UPSTREAM` 只接受 loopback origin，且只由 `serve` 读取。
+- `QODERZ_UPSTREAM` 只接受 loopback origin；`login`、`models`、`usage`、`serve` 都读取它，仅用于测试与测量。
 - 测试与测量全部使用 `127.0.0.1` 上的 stub 上游，不访问真实 Qoder、不使用真实账号。
 
 ## 性能测量

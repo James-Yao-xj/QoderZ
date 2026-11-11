@@ -128,9 +128,10 @@ CMake 使用 `GNUInstallDirs`，所以 `--prefix` 下的可执行文件位于 `b
 
 | 目标 | 内容 |
 | --- | --- |
-| `qoderz_core` | `src/common/log.cpp`，公共头文件目录 `src/` 与生成目录 |
+| `qoderz_core` | `src/**/*.cpp`（`GLOB_RECURSE`，去掉 `main.cpp`），公共头文件目录 `src/` 与生成目录 |
 | `qoderz` | `src/main.cpp`，链接 `qoderz_core`、CLI11、Boost、OpenSSL |
-| `qoderz_tests` | Catch2 v3 测试，只在 `BUILD_TESTING=ON` 时创建；通过 `QODERZ_BINARY` / `QODERZ_STUB_UPSTREAM` 编译定义拿到被测二进制路径 |
+| `qoderz_tests` | Catch2 v3 测试，只在 `BUILD_TESTING=ON` 时创建 |
+| `qoderz_e2e` | 进程级端到端测试，通过 `QODERZ_BINARY` / `QODERZ_STUB_UPSTREAM` 编译定义拿到被测二进制路径 |
 | `qoderz_stub_upstream` | loopback stub 上游，只在 `BUILD_TESTING=ON` 时构建，不安装 |
 
 依赖使用 target-based 写法，例如 `Boost::headers`、`OpenSSL::SSL`、`nlohmann_json::nlohmann_json`、`CLI11::CLI11`。不要退回到全局 `include_directories()` 或 `link_libraries()`，那会让依赖边界迅速失控。

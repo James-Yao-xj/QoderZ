@@ -26,7 +26,7 @@
 | GET | `/healthz` | 否 | `{"status":"ok"}`，200 |
 | GET | `/v1/models` | 是 | 健康账户目录并集 |
 | POST | `/v1/chat/completions` | 是 | 流式/非流式聊天 |
-| 其它方法 | 已存在的路径 | 是 | 405 + `Allow` 头，OpenAI 错误体 |
+| 其它方法 | 已存在的路径 | 仅 `/v1/*` | 405 + `Allow` 头，OpenAI 错误体 |
 | 任意方法 | 未定义路径 | 否 | 404 OpenAI 错误体 |
 
 404 文案：
@@ -85,8 +85,13 @@ QoderZ 对已知路径返回 405，并在 `Allow` 里列出正确方法。
   "supports_images":true,"supports_tools":true,"reasoning":true}]}
 ```
 
-`created` 是本次响应生成时刻，整个列表共用；不写 `name`。CLI 的 `models --json` 复用同一
-序列化器，避免 CLI 与 HTTP 形状漂移（这是对 NoQoder 的一个修正）。
+`created` 是本次响应生成时刻，整个列表共用；不写 `name`。
+
+HTTP 与 CLI 的模型对象**有意不同**，并不是同一个序列化器。`/v1/models` 面向 OpenAI 客户端，
+用 OpenAI 的模型对象形状：`reasoning` 是 bool，表示“这个模型支不支持推理”，并带上 `created`。
+`qoderz models --json` 面向人和脚本：`reasoning` 直接给出 effort 数组（形如
+`["low","medium","high"]`），也不写 `created`。两边只在字段名上对齐——
+`id`、`context_window`、`supports_images`、`supports_tools`——使用者不必为两种形状各学一遍。
 
 目录缓存按 `(site, vpc, uid)` 存 5 分钟、最多 64 条；空目录返回站点 fallback，但**不缓存**，
 下一次仍请求上游。`qoderz models` 始终强制刷新。
@@ -110,7 +115,7 @@ QoderZ 对已知路径返回 405，并在 `Allow` 里列出正确方法。
 候选来自账户池（见 §6），按顺序尝试：
 
 1. 确保 token 新鲜；auth/quota 失败 → 冷却并跳过；
-2. 取模型目录（先缓存）；如果该账户没有请求的模型，记 `saw_model=false`，尝试下一个；
+2. 取模型目录（先缓存）；如果该账户没有请求的模型，把它记进“未见到”列表，尝试下一个；
 3. 翻译请求、打开上游、peek 第一个 SSE 事件；
 4. 首事件是 auth/quota → 冷却并跳过；busy → 503，不换号；其它错误 → 直接映射，不换号；
 5. 成功 → 记录 success、绑定 session 到该账户、开始写响应。
@@ -205,14 +210,14 @@ Stop 后写 `data: [DONE]\n\n`；Error 后不写 `[DONE]`。客户端断开时�
 - 启动时预检：站点没有账户直接退出 1；pinned 账户不存在退出 1；非 loopback 无 key 退出 1。
 - 启动摘要（stderr）：版本、listen、站点、账户数、模式（pool/pinned/subset）、线程数、
   body 上限、上游是否为 loopback stub。
-- SIGINT/SIGTERM：停止 accept，等待在途请求至多一个可配置宽限（默认 5 秒），关闭上游连接池，
+- SIGINT/SIGTERM：停止 accept，等待在途请求至多一个固定宽限（`server::shutdown_grace`，5 秒），关闭上游连接池，
   退出 0；第二次信号立即退出。
 
 ## 8. 安全边界
 
 - 默认 loopback；非 loopback 必须显式 `--allow-public`，且强烈建议配置 key。
 - 凭据文件 0600；日志与错误体不含 token、PAT、`Authorization`、`Cosy-*`、prompt、图片。
-- `QODERZ_UPSTREAM` 只接受 loopback，且只允许 `serve` 使用；应用顺序必须在 VPC 解析之后，
+- `QODERZ_UPSTREAM` 只接受 loopback，`login`、`models`、`usage`、`serve` 都会读取；应用顺序必须在 VPC 解析之后，
   不能被 `--site` 悄悄丢掉（NoQoder 的已知坑）。
 - 错误体可以带 Qoder 的安全消息，但必须截断（≤1000 字符）并检查不包含秘密。
 - 不提供关闭 TLS 验证的开关；上游始终验证系统 CA 与主机名。
@@ -222,7 +227,7 @@ Stop 后写 `data: [DONE]\n\n`；Error 后不写 `[DONE]`。客户端断开时�
 - 单元测试：路由、鉴权、body 限制、错误映射、账户池、健康、绑定、模型并集。
 - 集成测试：独立 `stub_upstream` 进程 + `qoderz serve` 子进程；临时凭据、loopback、
   随机端口；覆盖流式/非流式、auth/quota failover、首事件后错误、全冷却、pinned、空池、
-  未知模型、VPC 路由、415/405/413。
+  未知模型、VPC 路由、404/405/413。
 - 所有网络测试只连 127.0.0.1；不允许真实 Qoder。
 - 性能测量从外部发压；报告 RSS、PSS、anonymous/private dirty、线程数、fd 数；不承诺数字。
   对比 NoQoder 时用同一台机器、同一 stub、同一 body 大小与并发。

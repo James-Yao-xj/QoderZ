@@ -303,7 +303,7 @@ Accept: application/json
   `thinking_config` 时用 `is_reasoning`；
 - 价格字段只影响展示，不影响请求。
 
-内置 fallback 模型列表在 `qoder/model_fallback.cpp`，以源码为准；空目录结果不能变成
+内置 fallback 模型列表在 `qoder/catalog/fallback.cpp`，以源码为准；空目录结果不能变成
 “没有模型”可用。
 
 ## 7. 用量

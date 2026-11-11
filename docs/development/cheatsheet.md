@@ -43,14 +43,26 @@
 ├── README.md
 ├── docs/
 │   ├── index.md
-│   └── development/{build,style,testing,cheatsheet}.md
-├── scripts/{check-budget.sh,format.sh}
+│   ├── performance.md
+│   ├── design/{architecture,accounts,cli,server}.md
+│   ├── development/{build,style,testing,cheatsheet}.md
+│   └── protocol/{qoder-auth,qoder-chat,openai-compat}.md
+├── scripts/{build.sh,check-budget.sh,format.sh,measure-idle.sh,measure-load.sh}
 ├── src/
 │   ├── main.cpp
-│   └── common/{error.hpp,log.hpp,log.cpp,json.hpp,version.hpp.in}
+│   ├── common/{error.hpp,log,json.hpp,strings,clock,codec/,net/}
+│   ├── protocol/{body_codec,cosy_signer,sse/}
+│   ├── config/{site,credentials,accounts,paths}
+│   ├── qoder/{auth/,catalog/,usage/,chat/,errors}
+│   ├── openai/{request/,response/,selection/}
+│   ├── server/{server,router,endpoints/,http/,pool/}
+│   └── cli/{app,options,output,commands/}
 └── tests/
     ├── CMakeLists.txt
-    └── unit/common/{error_test.cpp,log_test.cpp}
+    ├── unit/<layer>/{...}_test.cpp
+    ├── integration/{server_core,chat_endpoint,cli,e2e_server}_test.cpp
+    ├── support/{stub_server,temp_dir,server_harness,...}
+    └── stub_upstream/        qoderz_stub_upstream 的源码
 ```
 
 ## 调试
