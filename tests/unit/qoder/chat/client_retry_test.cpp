@@ -79,6 +79,28 @@ TEST_CASE("a busy first event is retried before the stream is handed over",
         *find_header(stub.m_requests[1].m_headers, "Cosy-Date"));
 }
 
+TEST_CASE("an auth failure as the first event is not retried", "[qoder][chat][client][retry]") {
+  asio::io_context io;
+  scripted_stub stub;
+  stub.m_answers.push_back(
+      text_response(200, "data: {\"statusCodeValue\":401,\"body\":{\"code\":\"105\","
+                         "\"message\":\"token expired\"}}\n"));
+  auto server = stub.make(io);
+  REQUIRE(server.start().has_value());
+
+  qoderz::net::http_client http{io};
+  passthrough_wrapper wrapper;
+  fake_clock time;
+  chat_client client{http, wrapper, time, tight_budget(5)};
+
+  auto outcome = run_awaitable(io, client.open(make_request(server)), 30s);
+  REQUIRE(outcome.has_value());
+  REQUIRE(!outcome->has_value());
+  CHECK(outcome->error().m_kind == error_kind::auth);
+  CHECK(outcome->error().m_http_status == 401);
+  CHECK(stub.m_requests.size() == 1);
+}
+
 TEST_CASE("a busy first event that never clears ends as busy", "[qoder][chat][client][retry]") {
   asio::io_context io;
   scripted_stub stub;

@@ -13,7 +13,6 @@
 #include <boost/beast/http/serializer.hpp>
 #include <boost/beast/http/status.hpp>
 #include <boost/beast/http/write.hpp>
-#include <cstddef>
 #include <utility>
 
 namespace qoderz::server {
@@ -65,18 +64,6 @@ bool connection_writer::started() const noexcept {
 
 bool connection_writer::streaming() const noexcept {
   return m_streaming;
-}
-
-boost::asio::awaitable<result<void>> connection_writer::write_bytes(void const* data,
-                                                                    std::size_t size) {
-  m_stream.expires_after(response_timeout);
-  auto [ec, written] = co_await asio::async_write(m_stream.socket(), asio::buffer(data, size),
-                                                  asio::as_tuple(asio::use_awaitable));
-  (void)written;
-  if (ec) {
-    co_return std::unexpected(socket_error(ec));
-  }
-  co_return result<void>{};
 }
 
 boost::asio::awaitable<result<void>> connection_writer::write_json(int status, std::string body) {

@@ -47,9 +47,6 @@ public:
   boost::asio::awaitable<result<void>> end_sse() override;
 
 private:
-  [[nodiscard]] boost::asio::awaitable<result<void>> write_bytes(void const* data,
-                                                                 std::size_t size);
-
   boost::beast::tcp_stream& m_stream;
   unsigned m_version;
   bool m_keep_alive;
