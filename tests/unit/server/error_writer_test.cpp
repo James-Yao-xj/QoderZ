@@ -36,7 +36,7 @@ TEST_CASE("Every error kind maps to its documented HTTP status and type", "[serv
       {error_kind::quota, 429, "insufficient_quota"},
       {error_kind::busy, 503, "server_busy"},
       {error_kind::upstream, 502, "upstream_error"},
-      {error_kind::io, 502, "upstream_error"},
+      {error_kind::io, 500, "internal_error"},
       {error_kind::protocol, 502, "upstream_error"},
       {error_kind::canceled, 499, "cancelled"},
       {error_kind::internal, 500, "internal_error"},
@@ -70,10 +70,35 @@ TEST_CASE("The status follows the error kind, not an upstream status", "[server]
   CHECK(http_status_for(bogus) == 400);
 }
 
+TEST_CASE("A local I/O failure is a 500 internal error, not an upstream one", "[server][error]") {
+  // AGENTS.md §4 makes common/error.hpp the source of truth for the kind-to-status mapping, and
+  // that table says io → 500. Only `upstream` and `protocol` may answer 502.
+  auto const io = make(error_kind::io);
+  CHECK(http_status_for(io) == qoderz::default_http_status(error_kind::io));
+  CHECK(http_status_for(io) == 500);
+  CHECK(type_for(io) == "internal_error");
+
+  auto const upstream = make(error_kind::upstream);
+  CHECK(http_status_for(upstream) == 502);
+  CHECK(type_for(upstream) == "upstream_error");
+
+  // A transport failure is local even when it happens after the upstream answered, so it must not
+  // borrow the gateway status.
+  CHECK(type_for(io) != type_for(upstream));
+  CHECK(http_status_for(io) != http_status_for(upstream));
+}
+
 TEST_CASE("The error body carries message, type and a numeric code", "[server][error]") {
   auto const body = to_json(qoderz::auth_error("invalid API key"));
   CHECK(body ==
         R"({"error":{"code":401,"message":"invalid API key","type":"authentication_error"}})");
+
+  // The pinned 413 keeps the numeric status in `code`; there is no string code to carry, and the
+  // Qoder error code of §3 never lands here.
+  auto const too_large = to_json(client_status_error(413, "too large"));
+  CHECK(too_large ==
+        R"({"error":{"code":413,"message":"too large","type":"invalid_request_error"}})");
+  CHECK(too_large.find("request_too_large") == std::string::npos);
 
   auto const not_found = to_json(client_status_error(404, "unknown endpoint"));
   CHECK(not_found.find(R"("code":404)") != std::string::npos);

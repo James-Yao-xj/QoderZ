@@ -33,7 +33,8 @@ namespace qoderz::server {
 /// A `bad_request` error pinned to a more specific client status (404, 405, 413).
 ///
 /// The kind stays `bad_request` so the type is `invalid_request_error`; a non-4xx status is ignored
-/// and the category status wins.
-[[nodiscard]] error client_status_error(int status, std::string message, std::string code = {});
+/// and the category status wins. The body carries only the numeric status, so there is no code
+/// argument to pass: §3 of docs/design/server.md keeps Qoder codes out of `code`.
+[[nodiscard]] error client_status_error(int status, std::string message);
 
 } // namespace qoderz::server

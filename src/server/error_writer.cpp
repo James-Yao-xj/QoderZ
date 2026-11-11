@@ -28,7 +28,9 @@ constexpr int status_of(error_kind kind) noexcept {
   case error_kind::upstream:
     return 502;
   case error_kind::io:
-    return 502;
+    // Local I/O failure, not an upstream one: the shared mapping in common/error.hpp owns this
+    // number, so the writer follows it instead of inventing a gateway-specific status.
+    return 500;
   case error_kind::protocol:
     return 502;
   case error_kind::canceled:
@@ -78,7 +80,9 @@ std::string type_for(error const& value) {
   case error_kind::busy:
     return "server_busy";
   case error_kind::upstream:
+    return "upstream_error";
   case error_kind::io:
+    return "internal_error";
   case error_kind::protocol:
     return "upstream_error";
   case error_kind::canceled:
@@ -117,10 +121,9 @@ std::string to_sse_frame(error const& value) {
   return frame;
 }
 
-error client_status_error(int status, std::string message, std::string code) {
-  error value = make_error(error_kind::bad_request, std::move(message), std::move(code));
+error client_status_error(int status, std::string message) {
+  error value = make_error(error_kind::bad_request, std::move(message));
   value.m_http_status = status;
   return value;
 }
-
 } // namespace qoderz::server

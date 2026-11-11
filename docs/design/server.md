@@ -16,7 +16,7 @@
   - `/healthz` 与 404 不鉴权；`/v1/models`、`/v1/chat/completions` 必须先鉴权。
 - 未配置 key 时，`/v1/*` 接受任意请求（本机使用场景）；非 loopback 的启动限制仍然生效。
 - 请求体上限默认 32 MiB（`--max-body-bytes`）。超限返回 413，`type=invalid_request_error`，
-  `code=request_too_large`，并关闭连接。
+  `code` 为数字 413，并关闭连接。
 - 请求 `Content-Type` 不做强制校验；body 必须是合法 JSON。
 
 ## 2. 路由
@@ -46,7 +46,8 @@ QoderZ 对已知路径返回 405，并在 `Allow` 里列出正确方法。
 {"error":{"message":"...","type":"...","code":<数字状态码>}}
 ```
 
-`code` 是数字（与 NoQoder 一致），`Content-Type: application/json`。只有 503 且
+`code` 恒为数字状态码，与 NoQoder 一致；Qoder 自己的错误码（例如 `10605`）只出现在
+`message` 里，不占用 `code` 字段。`Content-Type: application/json`。只有 503 且
 `retry_after > 0` 时写 `Retry-After`。
 
 | 分类 | HTTP | type |
@@ -59,6 +60,9 @@ QoderZ 对已知路径返回 405，并在 `Allow` 里列出正确方法。
 | 上游失败 | 502 | `upstream_error` |
 | 客户端取消 | 499 | 不写 body |
 | 其它 | 500 | `internal_error` |
+
+本地 I/O 失败（读写 socket、启动浏览器等）归入 `io`，按 `common/error.hpp` 的默认映射是
+500 `internal_error`；只有真正来自上游的失败才用 502 `upstream_error`。
 
 错误只在一个地方写：路由层。中间层返回 `result<T, error>`，不自己拼 HTTP。
 
