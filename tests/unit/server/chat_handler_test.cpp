@@ -254,3 +254,32 @@ TEST_CASE("a failed SSE head ends the request before any frame", "[server][chat]
                       error_kind::upstream);
   }
 }
+
+TEST_CASE("a failed terminating chunk leaves the turn unanswered", "[server][chat]") {
+  fixture scope;
+  auto handler = scope.make_handler();
+  recording_sink sink;
+  sink.m_end_failure = qoderz::make_error(error_kind::canceled, "the client went away");
+
+  chat_http_request request;
+  request.m_body = body_of("ultimate", true);
+  request.m_session_id = "session-13";
+  request.m_stream = true;
+  auto outcome = run_awaitable(scope.m_io, handler.handle(request, sink));
+
+  REQUIRE(outcome.has_value());
+  REQUIRE_FALSE(outcome->has_value());
+  CHECK(outcome->error().m_kind == error_kind::canceled);
+  CHECK(sink.m_streaming);
+  CHECK_FALSE(sink.m_ended);
+  REQUIRE_FALSE(sink.m_frames.empty());
+  CHECK(sink.m_frames.back() == "data: [DONE]\n\n");
+
+  // Every frame went out, but the terminating chunk did not: §5.5 marks the turn answered only
+  // after a complete write, so the next request of this session opens a turn rather than continuing
+  // one.
+  auto replay = ask(scope, "ultimate", true, "session-13");
+  REQUIRE(replay.m_outcome.has_value());
+  REQUIRE(scope.chat_calls() == 2);
+  CHECK(scope.sent_body(1).at("business").at("stage") == "start");
+}

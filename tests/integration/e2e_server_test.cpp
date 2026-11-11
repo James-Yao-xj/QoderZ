@@ -456,3 +456,48 @@ TEST_CASE("SIGTERM stops a running gateway within the grace period", "[e2e]") {
   CHECK(*code == 0);
   CHECK(fixture.m_gateway->wait_for_exit(1s).has_value());
 }
+
+TEST_CASE("the CLI usage command reads the stub quota", "[e2e]") {
+  temp_dir dir;
+  credential_store store{dir.file("credentials.json")};
+  auto const account = make_account();
+  credential_file file;
+  file.m_accounts.emplace(account.key(), account);
+  file.m_defaults[std::string{site_id}] = account.key();
+  REQUIRE(store.save(file).has_value());
+
+  auto upstream = process_runner::start(
+      process_runner::options{.m_executable = std::string{QODERZ_STUB_UPSTREAM},
+                              .m_arguments = {"--listen", "http://127.0.0.1:0"},
+                              .m_environment = {}});
+  REQUIRE(upstream.has_value());
+  auto const listening =
+      upstream->wait_for_line(process_stream::out, "stub-upstream listening on", ready_timeout);
+  REQUIRE(listening.has_value());
+  auto const port = port_of(*listening);
+  REQUIRE(port.has_value());
+
+  auto usage = process_runner::start(process_runner::options{
+      .m_executable = std::string{QODERZ_BINARY},
+      .m_arguments = {"usage", "--site", std::string{site_id}, "--credentials",
+                      dir.file("credentials.json").string()},
+      .m_environment = {{"QODERZ_UPSTREAM", "http://127.0.0.1:" + std::to_string(*port)},
+                        {"HOME", dir.path().string()},
+                        {"XDG_CONFIG_HOME", dir.file("xdg").string()},
+                        {"XDG_DATA_HOME", dir.file("data").string()},
+                        {"QODERZ_ACCOUNT", ""},
+                        {"QODERZ_LOG_LEVEL", "info"}}});
+  REQUIRE(usage.has_value());
+  auto const code = usage->wait_for_exit(exit_timeout);
+  REQUIRE(code.has_value());
+  CHECK(*code == 0);
+
+  // The stub's `/me/usage` has to be a legal answer: a `displayMode` other than `qoder` or a
+  // missing window makes the command exit 4 with "missing quota data" instead of printing a
+  // snapshot.
+  auto const printed = usage->captured(process_stream::out);
+  CHECK(printed.find("Plan: pro_trial") != std::string::npos);
+  CHECK(printed.find("Credits: 250 / 1000 credits (25%)") != std::string::npos);
+
+  (void)upstream->terminate(exit_timeout);
+}

@@ -143,7 +143,6 @@ boost::asio::awaitable<result<void>> stream_answer(detail::opened_upstream& open
       co_return result<void>{};
     }
     if (translator.answered()) {
-      sessions.mark_answered(opened.m_task_id);
       break;
     }
   }
@@ -155,7 +154,17 @@ boost::asio::awaitable<result<void>> stream_answer(detail::opened_upstream& open
       co_return sent;
     }
   }
-  co_return co_await sink.end_sse();
+  auto ended = co_await sink.end_sse();
+  // §5.5: the turn only counts as answered once the downstream is completely written. A client
+  // that dies between the Stop frame and the terminating chunk leaves it unanswered, so its next
+  // request opens a turn instead of continuing one.
+  if (!ended) {
+    co_return ended;
+  }
+  if (translator.answered()) {
+    sessions.mark_answered(opened.m_task_id);
+  }
+  co_return result<void>{};
 }
 
 boost::asio::awaitable<result<void>> json_answer(detail::opened_upstream& opened,

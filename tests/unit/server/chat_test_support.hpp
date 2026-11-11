@@ -162,6 +162,9 @@ public:
   }
 
   asio::awaitable<qoderz::result<void>> end_sse() override {
+    if (m_end_failure.has_value()) {
+      co_return std::unexpected(*m_end_failure);
+    }
     m_ended = true;
     co_return qoderz::result<void>{};
   }
@@ -177,6 +180,9 @@ public:
   /// Forces `begin_sse()` to fail the way a dead socket does, so a case can check that nothing is
   /// written after a head that never went out.
   std::optional<qoderz::error> m_begin_failure;
+  /// Forces `end_sse()` to fail the way a socket that died between the Stop frame and the
+  /// terminating chunk does, so a case can check that the turn is left unanswered.
+  std::optional<qoderz::error> m_end_failure;
   std::size_t m_break_after = static_cast<std::size_t>(-1);
 };
 

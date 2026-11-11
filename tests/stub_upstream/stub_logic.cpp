@@ -118,7 +118,14 @@ std::string stub_job_token_body() {
 }
 
 std::string stub_usage_body() {
-  return json{{"qoderUsage", json{{"used", 0}, {"total", 3000}}}}.dump();
+  // A legal `/me/usage` answer: `displayMode` must be `qoder` and at least one window has to carry
+  // a usable total, otherwise `qoderz usage` reports "missing quota data" and exits 4.
+  json const window{{"total", 1000}, {"used", 250}, {"unit", "credits"}};
+  return json{{"displayMode", "qoder"},
+              {"userType", "pro_trial"},
+              {"expiresAt", 1767225600000LL},
+              {"qoderUsage", json{{"userQuota", window}}}}
+      .dump();
 }
 
 stub_route_result stub_route(stub_request const& request, stub_upstream_options const& options) {
