@@ -8,16 +8,9 @@ C++23 的协程、RAII 与 `std::expected` 让异步路径既直白又不依赖�
 
 依赖只能向下：
 
-```text
-cli  ──────────────┐
-                   ▼
-server ───────► openai ───────► protocol
-  │                │                │
-  └──────────► qoder ──────────────┤
-                   │               │
-                   ▼               ▼
-                 config ───────► common
-```
+依赖主链：`cli → server → openai → qoder → config → common`。
+`protocol` 被 `openai`/`qoder`/`server` 依赖，自身只依赖 `common`；`qoder` 也依赖 `protocol`。
+`openai` 可以构造 `qoder` 的请求类型，但 `qoder` 不认识任何 OpenAI 概念。
 
 | 层 | 职责 | 不做什么 |
 | --- | --- | --- |

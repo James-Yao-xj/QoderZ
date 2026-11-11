@@ -13,7 +13,7 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_L
   message(FATAL_ERROR "qoderz requires GCC 14 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
 endif()
 
-find_package(Boost 1.83 REQUIRED CONFIG)
+find_package(Boost 1.83 REQUIRED CONFIG COMPONENTS url)
 find_package(OpenSSL REQUIRED)
 find_package(nlohmann_json 3.11 REQUIRED)
 find_package(CLI11 2.3 REQUIRED)
@@ -25,7 +25,12 @@ configure_file(
   @ONLY
 )
 
-add_library(qoderz_core STATIC src/common/log.cpp)
+file(GLOB_RECURSE QODERZ_CORE_SOURCES CONFIGURE_DEPENDS
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
+)
+list(REMOVE_ITEM QODERZ_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+
+add_library(qoderz_core STATIC ${QODERZ_CORE_SOURCES})
 add_library(qoderz::core ALIAS qoderz_core)
 
 target_include_directories(qoderz_core
@@ -34,7 +39,15 @@ target_include_directories(qoderz_core
     "${CMAKE_BINARY_DIR}/generated"
 )
 
-target_link_libraries(qoderz_core PUBLIC nlohmann_json::nlohmann_json)
+target_link_libraries(qoderz_core
+  PUBLIC
+    nlohmann_json::nlohmann_json
+    Boost::headers
+  PRIVATE
+    OpenSSL::SSL
+    OpenSSL::Crypto
+    Boost::url
+)
 target_compile_features(qoderz_core PUBLIC cxx_std_23)
 target_compile_options(qoderz_core PRIVATE -Wall -Wextra -Wpedantic -Wshadow)
 

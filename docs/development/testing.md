@@ -5,8 +5,8 @@
 ## 框架与位置
 
 - 框架固定 Catch2 v3，链接 `Catch2::Catch2WithMain`，测试文件不需要自己写 `main`。
-- 测试入口在 `tests/CMakeLists.txt`；新增文件要显式加入 `qoderz_tests` 的源列表。
-- 单元测试放在 `tests/unit/<层>/`，当前是 `tests/unit/common/`。
+- 测试入口在 `tests/CMakeLists.txt`；它用 `GLOB_RECURSE CONFIGURE_DEPENDS` 自动收集 `tests/unit/**/*.cpp` 与 `tests/support/*.cpp`，新增测试文件不需要改列表。
+- 单元测试放在 `tests/unit/<层>/`，按模块分子目录（例如 `common/`、`protocol/`、`config/`）；共享夹具放在 `tests/support/`。
 - 未来集成测试放在 `tests/integration/`，每个测试自己启动 loopback stub。
 - 一个目录下的代码文件不超过 8 个；测试多了同样按职责拆子目录。
 
@@ -69,7 +69,7 @@ static_assert(qoderz::default_http_status(error_kind::quota) == 429);
 ## 禁止事项
 
 - 禁止使用真实 Qoder 账号、真实 token、真实 cookie 或录制真实会话。
-- 禁止在测试中调用真实 Qoder 服务；本批次完全没有网络测试。
+- 禁止在测试中调用真实 Qoder 服务；当前所有单元测试不联网，HTTP/协议测试只使用 `127.0.0.1` loopback stub。
 - 禁止把抓包内容、用户 prompt、图片字节或 `Cosy-*` 头写进测试夹具、快照或日志。
 - 禁止用 `sleep` 等固定时长假装同步；用条件变量、future 或可注入的时钟。
 - 禁止依赖测试执行顺序或共享可变全局状态。日志级别这类全局状态在用例结束后要恢复原值。
