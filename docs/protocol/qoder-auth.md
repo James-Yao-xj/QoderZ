@@ -95,10 +95,14 @@ Content-Type: application/json
 
 - 200：`access = token | access_token`，必须非空；`refresh = refresh_token | refreshToken`；
   `expires_in` 按**毫秒**解释；`deviceChat = false`；
-- `qoder-cn` 且 HTTP 4xx：回退到轮询拿到的 device token：
+- `qoder-cn` 且 HTTP 4xx（**429 除外**）：回退到轮询拿到的 device token：
   `access = poll.token`、`refresh = poll.refresh`、`deviceChat = true`、
   `expires_in` 按**秒**解释；
-- 国际站同状态：认证错误；其它非 200：上游错误。
+- `qoder-cn` 且 HTTP 429：不视为回退信号，按 [§8](#8-错误映射) 映射为额度错误。
+  回退会把 `deviceChat = true` 永久写进账户记录，而 429 是临时限流；用一次节流换账户永久降级
+  不值得，也不符合「429 可重试」的语义；
+- 国际站同状态：一律认证错误（说明这次登录被上游拒绝），不看 body 文案；
+- 其它非 200：上游错误。
 
 ### 2.4 userinfo
 
