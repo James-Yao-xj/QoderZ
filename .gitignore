@@ -18,6 +18,7 @@ compile_commands.json
 # 本地环境与密钥
 .env
 .env.local
+.envrc
 *.pem
 *.key
 
