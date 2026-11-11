@@ -1,6 +1,8 @@
 file(GLOB_RECURSE qoderz_test_sources CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/unit/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/integration/*.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/support/*.cpp"
+
 )
 
 add_executable(qoderz_tests ${qoderz_test_sources})
