@@ -56,15 +56,19 @@ static_assert(qoderz::default_http_status(error_kind::quota) == 429);
 
 当前骨架覆盖：错误名称、默认 HTTP 状态、具名构造 helper、`result<T>` 的成功/失败分支、日志级别往返解析、大小写与非法输入、日志阈值读写。
 
-## loopback stub（后续批次）
+## loopback stub
 
-涉及 HTTP 与上游协议时，测试必须在 `127.0.0.1` 上自建 stub，不允许连接真实 Qoder：
+涉及 HTTP 与上游协议时，测试必须在 `127.0.0.1` 上自建 stub，不允许连接真实 Qoder。
+`tests/support/stub_server.hpp` 提供了这套基础设施，`tests/support/async_test.hpp` 负责把协程跑完：
 
 - stub 由测试进程持有，绑定 `127.0.0.1:0` 让操作系统分配端口，避免固定端口冲突。
 - 把 stub 的 base URL 通过构造参数或依赖注入传给被测对象，不要在代码里硬编码线上域名。
 - stub 校验关键请求头（例如 `Authorization`、`Content-Type`）和请求体结构；对被拒绝的请求返回明确状态码。
+- 可以按需延迟响应头、延迟分块、发 chunked 响应，或用 `m_close_after` 在响应中途断开。
+- `connection_count()` 统计 accept 次数，用来验证连接复用或 `Connection: close` 的行为。
 - 每个测试结束前关闭 listener、join 线程；超时时间要短且可控。
 - 不访问外部 DNS、不走系统代理、不依赖公网证书。TLS 相关测试使用测试专用证书或本地终止，不导入真实证书。
+- 时间相关的逻辑注入 `qoderz::clock`，测试用假时钟推进，不用 `sleep`。
 
 ## 禁止事项
 

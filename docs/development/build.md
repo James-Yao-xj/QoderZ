@@ -8,8 +8,8 @@ QoderZ 用 Nix flake 固定整套工具链。目标很简单：换一台 Linux �
 | --- | --- | --- |
 | GCC 14 | `nixpkgs.gcc14` | C++23 编译 |
 | CMake / Ninja | devShell | 配置与构建 |
-| Boost | devShell | Asio / Beast（后续批次使用） |
-| OpenSSL | devShell | TLS 与摘要（后续批次使用） |
+| Boost | devShell | Asio / Beast / URL（HTTP 客户端与异步协程） |
+| OpenSSL | devShell | TLS、AES、RSA、SHA/MD5 与安全随机 |
 | nlohmann_json | devShell | JSON |
 | CLI11 | devShell | 命令行解析 |
 | Catch2 v3 | devShell | 单元测试 |
