@@ -475,3 +475,42 @@ TEST_CASE("a request to a malformed URL fails before touching the network",
   REQUIRE_FALSE(outcome->has_value());
   CHECK(outcome->error().m_kind == error_kind::bad_request);
 }
+TEST_CASE("chunk sizes above nine are written in hexadecimal", "[common][net][http_client]") {
+  asio::io_context io;
+  stub_response response;
+  response.m_chunked = true;
+  response.m_chunks = {"0123456789", "abcdefghijklmnopqrstuvwxyz", "0123456789abcdef"};
+  stub_server server{io, [response](stub_request const&) -> asio::awaitable<stub_response> {
+                       co_return response;
+                     }};
+  REQUIRE(server.start().has_value());
+
+  http_client client{io};
+  http_request request;
+  request.m_url = server.origin() + "/wide-chunks";
+  auto outcome =
+      run_awaitable(io, [&]() -> asio::awaitable<qoderz::result<std::vector<std::string>>> {
+        auto stream = co_await client.open(request);
+        if (!stream) {
+          co_return std::unexpected(stream.error());
+        }
+        std::vector<std::string> chunks;
+        for (;;) {
+          auto chunk = co_await (*stream)->read_some();
+          if (!chunk) {
+            co_return std::unexpected(chunk.error());
+          }
+          if (!chunk->has_value()) {
+            co_return chunks;
+          }
+          chunks.push_back(chunk->value());
+        }
+      }());
+  REQUIRE(outcome.has_value());
+  REQUIRE(outcome->has_value());
+  std::string joined;
+  for (auto const& chunk : outcome->value()) {
+    joined.append(chunk);
+  }
+  CHECK(joined == "0123456789abcdefghijklmnopqrstuvwxyz0123456789abcdef");
+}

@@ -38,6 +38,17 @@ std::unexpected<qoderz::error> io_error(std::string_view detail) {
       qoderz::error_kind::io, "The stub server could not start: " + std::string{detail}));
 }
 
+std::string hex_size(std::size_t size) {
+  constexpr std::string_view digits = "0123456789abcdef";
+  std::string text;
+  do {
+    text.push_back(digits[size % 16]);
+    size /= 16;
+  } while (size > 0);
+  std::reverse(text.begin(), text.end());
+  return text;
+}
+
 std::string serialize(stub_response const& response) {
   std::string wire;
   wire.append("HTTP/1.1 ");
@@ -68,7 +79,6 @@ std::string serialize(stub_response const& response) {
   wire.append("\r\n");
   return wire;
 }
-
 } // namespace
 
 struct stub_server::state {
@@ -138,7 +148,7 @@ boost::asio::awaitable<bool> write_response(beast::tcp_stream& stream,
         co_await pause(response.m_delay_between_chunks);
       }
       std::string frame;
-      frame.append(std::to_string(chunk.size()));
+      frame.append(hex_size(chunk.size()));
       frame.append("\r\n");
       frame.append(chunk);
       frame.append("\r\n");
