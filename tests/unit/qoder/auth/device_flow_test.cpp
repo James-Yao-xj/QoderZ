@@ -213,6 +213,51 @@ TEST_CASE("a failed browser launch does not stop the sign-in", "[qoder][auth][de
   REQUIRE(outcome->has_value());
 }
 
+TEST_CASE("a browser launch failure is logged with a fixed reason", "[qoder][auth][device]") {
+  std::vector<std::string> const details{
+      "no display available",
+      "fork failed while starting xdg-open for "
+      "https://qoder.example.invalid/device/selectAccounts?challenge=forged-challenge"};
+  for (auto const& detail : details) {
+    asio::io_context io;
+    stub_server server{
+        io, [](stub_request const& request) -> asio::awaitable<stub_response> {
+          auto const path = path_of(request.m_target);
+          if (path == "/api/v1/deviceToken/poll") {
+            co_return json_response(200, R"({"token":"test-device-token-not-real"})");
+          }
+          if (path == "/api/v1/me/jobToken") {
+            co_return json_response(200, R"({"token":"test-job-token-not-real",)"
+                                         R"("refresh_token":"test-job-refresh-not-real"})");
+          }
+          co_return json_response(200, R"({"id":"uid-test-not-real"})");
+        }};
+    REQUIRE(server.start().has_value());
+
+    qoderz::net::http_client http{io};
+    fixture env{server};
+    REQUIRE(env.m_ready);
+    device_flow flow{http, *env.m_site, env.m_resolved, env.m_clock,
+                     [&detail](std::string_view) -> qoderz::result<void> {
+                       return std::unexpected(qoderz::make_error(error_kind::io, detail));
+                     }};
+
+    auto const previous = qoderz::current_log_level();
+    qoderz::set_log_level(qoderz::log_level::trace);
+    qoderz::test::stderr_capture capture;
+    REQUIRE(capture.available());
+    auto outcome = run_awaitable(io, flow.login(login_options{}));
+    auto const logged = capture.release();
+    qoderz::set_log_level(previous);
+
+    REQUIRE(outcome.has_value());
+    REQUIRE(outcome->has_value());
+    CHECK(logged.find(R"(reason="browser launch failed")") != std::string::npos);
+    CHECK(logged.find(detail) == std::string::npos);
+    CHECK(logged.find("forged-challenge") == std::string::npos);
+  }
+}
+
 TEST_CASE("a device sign-in never writes a token or an email to the log", "[qoder][auth][device]") {
   asio::io_context io;
   stub_server server{

@@ -38,6 +38,7 @@ constexpr std::string_view vpc_no_uid_message = "Qoder returned no account id fo
 constexpr std::string_view no_job_token_message =
     "Qoder returned no job token for the device sign-in";
 constexpr std::string_view refused_prefix = "Qoder refused the device sign-in (HTTP ";
+constexpr std::string_view browser_launch_failed = "browser launch failed";
 constexpr int rate_limit_status = 429;
 constexpr std::chrono::milliseconds job_expires_unit{1};
 constexpr std::chrono::milliseconds device_expires_unit{1000};
@@ -159,8 +160,10 @@ device_flow::login(login_options const& options, progress_callback const& progre
 
   if (options.m_open_browser) {
     if (auto const opened = m_launcher(challenge.m_url); !opened) {
+      // The launcher's message is free text and may embed the URL (challenge, nonce, machine id),
+      // so the log carries a fixed reason and never the launcher's wording.
       log(log_level::warn, "could not open a browser for the device link",
-          {{"site", m_site.m_id}, {"reason", opened.error().m_message}});
+          {{"site", m_site.m_id}, {"reason", browser_launch_failed}});
     }
   }
 

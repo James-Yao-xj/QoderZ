@@ -34,20 +34,50 @@ bool needs_quotes(std::string_view value) {
   if (value.empty()) {
     return true;
   }
+  for (char const character : value) {
+    if (static_cast<unsigned char>(character) < 0x20) {
+      return true;
+    }
+  }
   return value.find_first_of(" \t\r\n=\"") != std::string_view::npos;
 }
 
+/// Escapes control characters so a value from outside the process cannot end the record early or
+/// forge a second one; the quotes keep the escapes unambiguous inside key=value.
 void append_value(std::string& line, std::string_view value) {
   if (!needs_quotes(value)) {
     line.append(value);
     return;
   }
+  constexpr std::string_view hex_digits = "0123456789abcdef";
   line.push_back('"');
   for (char const character : value) {
-    if (character == '"' || character == '\\') {
+    auto const byte = static_cast<unsigned char>(character);
+    switch (character) {
+    case '"':
+    case '\\':
       line.push_back('\\');
+      line.push_back(character);
+      break;
+    case '\n':
+      line += "\\n";
+      break;
+    case '\r':
+      line += "\\r";
+      break;
+    case '\t':
+      line += "\\t";
+      break;
+    default:
+      if (byte < 0x20) {
+        line += "\\x";
+        line.push_back(hex_digits[static_cast<std::size_t>(byte >> 4U)]);
+        line.push_back(hex_digits[static_cast<std::size_t>(byte & 0x0FU)]);
+      } else {
+        line.push_back(character);
+      }
+      break;
     }
-    line.push_back(character);
   }
   line.push_back('"');
 }
