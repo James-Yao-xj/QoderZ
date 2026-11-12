@@ -80,6 +80,26 @@ HTTP 模板对明文和 TLS 两种 stream 各实例化一遍，单独一个编�
 | 清空产物后重建 | 75 s | 18 s |
 | 改一个头文件 | 30 s+ | 22 s |
 
+### `nix build` 不经过 ccache
+
+`nix build .#` 在沙箱里构建，只把 `buildInputs` 与 `nativeBuildInputs` 加进 `PATH`，
+而 `ccache` 不在其中，也不继承 devShell 的 `shellHook`。配置阶段会明确打印：
+
+```text
+-- qoderz: ccache not found; compiling directly
+```
+
+这是有意的取舍，不是配置遗漏。Nix 的缓存单位是**整个 derivation**：源码不变时直接复用 store
+里的结果、一次编译都不做；源码一改则全部重建。让 ccache 在沙箱里生效需要把缓存目录挂进沙箱，
+那会破坏可复现性，而可复现性正是用 Nix 构建的理由。
+
+所以两者分工明确：
+
+| 目的 | 命令 | 缓存行为 |
+| --- | --- | --- |
+| 日常开发循环 | `scripts/build.sh` | 走 ccache，改一个文件通常数秒 |
+| 发布产物 | `nix build .#` | 走 Nix store，源码不变则秒回，改了则全量重建 |
+
 ### 并行度与内存
 
 一个 Beast 编译单元的峰值常驻内存接近 1 GiB，`-j8` 在 13 GiB 的机器上会摸到尖峰并开始换页。
