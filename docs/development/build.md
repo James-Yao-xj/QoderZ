@@ -69,8 +69,16 @@ HTTP 模板对明文和 TLS 两种 stream 各实例化一遍，单独一个编�
 - 关闭 GCC 的 C++ 模块依赖扫描（`CMAKE_CXX_SCAN_FOR_MODULES=OFF`）。项目不使用 C++20 模块，
   而 `-fmodules-ts` 会让 ccache 把每一次编译判为不可缓存（"Unsupported compiler option"），
   顺带每个编译单元还要多跑一遍扫描。关掉之后可缓存率从 0% 升到 90% 以上。
-- 自动探测 `ccache` 并用 `CMAKE_CXX_COMPILER_LAUNCHER` 接上。缓存目录在代码树的
-  `.ccache/`，上限由 devShell 的 `CCACHE_MAXSIZE` 控制（默认 5 GiB）。
+- 自动探测 `ccache` 并用 `CMAKE_CXX_COMPILER_LAUNCHER` 接上。缓存默认在
+  `~/.cache/qoderz/ccache`（遵循 XDG，**不在源码树里**），上限由 devShell 的
+  `CCACHE_MAXSIZE` 控制（默认 5 GiB），可用 `CCACHE_DIR` 覆盖。
+
+  缓存不能放源码树：`nix build` 每次都会把源码树复制进 store，几 GB 的缓存目录会让每次
+  flake 操作都变慢，而且 ccache 一直在写入新对象、源码指纹随之移动。也不能放 `.git/`：
+  linked worktree 里 `.git` 是个文件，而且版本控制元数据本该与构建产物分开。
+
+  升级过配置的旧 shell 里可能还留着指向源码树的 `CCACHE_DIR`，它会让
+  `${CCACHE_DIR:-默认}` 的回退失效；`unset CCACHE_DIR` 或重开终端即可。
 
 实测（28 核 / 13 GiB 内存的机器）：
 

@@ -30,7 +30,12 @@
                 "build"
                 "result"
                 ".direnv"
+                # Defensive: the dev shell keeps ccache in `.git/ccache`, but a
+                # hand-set `CCACHE_DIR=$PWD/.ccache` must not drag gigabytes of
+                # cache objects into the flake source either.
+                ".ccache"
               ]);
+
           };
 
           nativeBuildInputs = with pkgs; [
@@ -98,7 +103,15 @@
             # A cold build of the tree takes a few minutes; ccache turns the
             # repeat cost into seconds. Keep the cache bounded so it cannot
             # crowd out the rest of the user's home directory.
-            export CCACHE_DIR="''${CCACHE_DIR:-$PWD/.ccache}"
+            #
+            # The cache lives under the XDG cache directory, never in the working
+            # tree: Nix copies the tree into the store on every build, so a
+            # multi-gigabyte cache there slows each flake operation down and keeps
+            # moving the source fingerprint. It deliberately does not live in
+            # `.git` either — in a linked worktree `.git` is a file, and version
+            # control metadata should stay free of build artifacts.
+            export CCACHE_DIR="''${CCACHE_DIR:-$HOME/.cache/qoderz/ccache}"
+
             export CCACHE_MAXSIZE="''${CCACHE_MAXSIZE:-5G}"
             export CCACHE_COMPRESS="''${CCACHE_COMPRESS:-true}"
             export CCACHE_BASEDIR="''${CCACHE_BASEDIR:-$PWD}"
