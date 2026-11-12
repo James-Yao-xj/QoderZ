@@ -12,7 +12,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 14)
   message(FATAL_ERROR "qoderz requires GCC 14 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
 endif()
-# --- Build speed -------------------------------------------------------------
+
 # GCC's "-fmodules-ts" dependency scanner makes every compile uncacheable for
 # ccache (it reports "Unsupported compiler option") and doubles the work per
 # translation unit. QoderZ does not use C++20 modules, so the scanner only costs
@@ -42,6 +42,14 @@ file(GLOB_RECURSE QODERZ_CORE_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp"
 )
 list(REMOVE_ITEM QODERZ_CORE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
+
+# GCC 14 pairs the `std::aligned_alloc` that Asio uses for a coroutine frame with
+# the frame's `operator delete` and reports them as a mismatched new/delete pair.
+# Both halves of that pair come from Asio and the pair is legal, so the warning is
+# a false positive. QoderZ forbids raw `new`/`delete`, leaving it meaningless.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  add_compile_options(-Wno-mismatched-new-delete)
+endif()
 
 add_library(qoderz_core STATIC ${QODERZ_CORE_SOURCES})
 add_library(qoderz::core ALIAS qoderz_core)

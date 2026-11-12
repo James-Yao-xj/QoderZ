@@ -19,14 +19,6 @@
 #include <utility>
 #include <vector>
 
-// GCC 14 pairs Asio's awaitable-frame `std::aligned_alloc` with `std::free` and then warns about
-// the mismatch, which is the allocation pair Asio itself uses and a legal one. The warning fires
-// only for these three coroutines because they are the ones GCC inlines to that size; silencing it
-// here keeps the rest of the translation unit checked.
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
-#endif
-
 namespace qoderz::qoder::auth {
 namespace {
 

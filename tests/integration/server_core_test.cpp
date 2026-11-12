@@ -1,10 +1,3 @@
-// GCC 14 pairs Asio's awaitable-frame `std::aligned_alloc` with `std::free` and then warns about
-// the mismatch, which is the allocation pair Asio itself uses and a legal one.
-// src/qoder/auth/token.cpp silences the same warning for the same reason.
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
-#endif
-
 #include "server/config.hpp"
 #include "server/router.hpp"
 #include "support/async_test.hpp"

@@ -1,11 +1,5 @@
 #pragma once
 
-// GCC 14 pairs Asio's awaitable-frame `std::aligned_alloc` with `std::free` and then warns about
-// the mismatch, which is the allocation pair Asio itself uses and a legal one.
-#if defined(__GNUC__) && !defined(__clang__)
-#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
-#endif
-
 #include "common/error.hpp"
 #include "common/json.hpp"
 #include "common/net/http_client.hpp"
