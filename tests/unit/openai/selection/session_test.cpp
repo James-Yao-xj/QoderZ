@@ -208,7 +208,8 @@ TEST_CASE("A hit keeps the task alive past the idle window", "[openai][selection
   session_store store;
 
   auto const first = store.get_or_create("s", 1, "hello", start_ms);
-  store.get_or_create("s", 1, "hello", start_ms + hour_ms);
+  // Only the refresh matters here: the hit has to age the task without replacing it.
+  (void)store.get_or_create("s", 1, "hello", start_ms + hour_ms);
   auto const later = store.get_or_create("s", 1, "hello", start_ms + hour_ms + hour_ms - 1);
 
   CHECK(later.m_id == first.m_id);
@@ -218,10 +219,12 @@ TEST_CASE("A full store evicts the least recently used task", "[openai][selectio
   session_store store{2, two_hours_ms};
 
   auto const first = store.get_or_create("s", 0, "one", start_ms);
-  store.get_or_create("s", 1, "two", start_ms + 10);
+  // The results below are discarded on purpose: these calls fill the store to its capacity of two
+  // and fix the order the eviction has to follow, and nothing else.
+  (void)store.get_or_create("s", 1, "two", start_ms + 10);
   // Touching the first turn makes the second one the oldest entry.
-  store.get_or_create("s", 0, "one", start_ms + 20);
-  store.get_or_create("s", 2, "three", start_ms + 30);
+  (void)store.get_or_create("s", 0, "one", start_ms + 20);
+  (void)store.get_or_create("s", 2, "three", start_ms + 30);
 
   CHECK(store.size() == 2);
   CHECK(store.get_or_create("s", 0, "one", start_ms + 40).m_id == first.m_id);

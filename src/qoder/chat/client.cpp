@@ -17,6 +17,13 @@
 #include <string>
 #include <utility>
 
+// GCC 14 pairs Asio's `std::aligned_alloc` coroutine frame with the frame's `operator delete` and
+// reports them as a mismatched new/delete pair. Both sides come from Asio, and that pair is legal,
+// so the warning is a known false positive. `qoder/auth/token.cpp` silences it the same way.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic ignored "-Wmismatched-new-delete"
+#endif
+
 namespace qoderz::qoder::chat {
 namespace {
 
