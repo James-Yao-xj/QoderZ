@@ -2,6 +2,7 @@
 #include "common/codec/hash.hpp"
 #include "common/codec/random.hpp"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <span>
@@ -139,6 +140,14 @@ TEST_CASE("md5 matches the fixed vectors", "[common][codec][hash]") {
   CHECK(qoderz::codec::md5_hex("hello world") == "5eb63bbbe01eeed093cb22bb8f5acdc3");
   CHECK(qoderz::codec::md5_hex("The quick brown fox jumps over the lazy dog") ==
         "9e107d9d372bb6826bd81d3542a419d6");
+}
+
+TEST_CASE("md5 hashes disjoint binary parts as their concatenation", "[common][codec][hash]") {
+  auto const binary = std::string{"a\0b\xff", 4};
+  std::array<std::string_view, 4> const parts{std::string_view{binary}.substr(0, 2), "",
+                                              std::string_view{binary}.substr(2), "suffix"};
+  CHECK(qoderz::codec::md5_hex_parts(parts) == qoderz::codec::md5_hex(binary + "suffix"));
+  CHECK(qoderz::codec::md5_hex_parts({}) == qoderz::codec::md5_hex(""));
 }
 
 TEST_CASE("hex_encode writes lowercase pairs", "[common][codec][hash]") {

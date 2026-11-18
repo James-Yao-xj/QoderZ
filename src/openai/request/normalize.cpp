@@ -75,9 +75,10 @@ message_block image_block(std::string url) {
   return block;
 }
 
-json content_of(json const& message) {
+json const& content_of(json const& message) {
+  static json const empty_content = nullptr;
   auto const content = message.find("content");
-  return content == message.end() ? json{} : *content;
+  return content == message.end() ? empty_content : *content;
 }
 
 void append_user_blocks(json const& content, std::vector<message_block>& blocks) {
@@ -260,20 +261,20 @@ int match_call(std::vector<pending_call> const& calls, std::string const& call_i
 }
 
 void add_user(normalize_result& result, json const& message, int index, bool& has_user) {
-  auto const content = content_of(message);
+  auto const& content = content_of(message);
 
   normalized_message normalized;
   normalized.m_role = "user";
   append_user_blocks(content, normalized.m_blocks);
   normalized.m_array_content = content.is_array();
 
-  auto const text = read_text_content(content);
+  auto text = read_text_content(content);
   if (!has_user) {
     result.m_first_user_text = text;
     has_user = true;
   }
   result.m_last_user_index = index;
-  result.m_last_user_text = text;
+  result.m_last_user_text = std::move(text);
   result.m_messages.push_back(std::move(normalized));
 }
 
@@ -287,11 +288,11 @@ void add_assistant(normalize_result& result, json const& message, int& assistant
   normalized_message normalized;
   normalized.m_role = "assistant";
   append_assistant_blocks(content_of(message), normalized.m_blocks);
-  normalized.m_tool_calls = calls;
+  normalized.m_tool_calls = std::move(calls);
   result.m_messages.push_back(std::move(normalized));
 
   open.clear();
-  for (auto const& call : calls) {
+  for (auto const& call : result.m_messages.back().m_tool_calls) {
     open.push_back(pending_call{.m_id = call.m_id, .m_matched = false});
   }
 }
@@ -299,7 +300,7 @@ void add_assistant(normalize_result& result, json const& message, int& assistant
 void add_tool_result(normalize_result& result, json const& message, std::vector<pending_call>& open,
                      std::vector<image_group>& pending_images) {
   auto const call_id = read_trimmed(message, "tool_call_id");
-  auto const content = content_of(message);
+  auto const& content = content_of(message);
 
   auto text = read_text_content(content);
   auto images = read_images(content);

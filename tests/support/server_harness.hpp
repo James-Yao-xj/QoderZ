@@ -179,7 +179,7 @@ public:
   explicit fake_chat(mode how, std::chrono::milliseconds delay = std::chrono::milliseconds{0})
       : m_mode{how}, m_delay{delay} {}
 
-  asio::awaitable<qoderz::result<void>> handle(chat_http_request const& request,
+  asio::awaitable<qoderz::result<void>> handle(chat_http_request& request,
                                                response_sink& sink) override {
     m_last = request;
     ++m_calls;

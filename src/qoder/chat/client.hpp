@@ -24,18 +24,16 @@ public:
   chat_client(net::http_client& http, protocol::rsa_key_wrapper const& wrapper, clock& time,
               retry_options options = {});
 
-  /// Sends the request and returns a stream positioned before its first event.
+  /// Takes ownership of the request and returns a stream positioned before its first event.
+  /// Move an owned request here to avoid copying its plaintext body.
   ///
   /// The first event is read before the stream is handed over, because it is the last moment an
   /// account can still be swapped; it is put back so the caller sees the whole response. A response
   /// that ends without any event yields a stream that is already finished, which the caller answers
   /// with an empty completion.
-  boost::asio::awaitable<result<std::unique_ptr<chat_stream>>>
-  open(upstream_request const& request);
+  boost::asio::awaitable<result<std::unique_ptr<chat_stream>>> open(upstream_request request);
 
 private:
-  boost::asio::awaitable<result<std::unique_ptr<net::http_stream>>>
-  post(signed_request const& request);
   boost::asio::awaitable<result<void>> wait(std::chrono::milliseconds delay);
 
   net::http_client& m_http;

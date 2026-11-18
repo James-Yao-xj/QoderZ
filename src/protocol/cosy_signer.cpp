@@ -5,6 +5,7 @@
 #include "common/codec/random.hpp"
 #include "common/strings.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -309,8 +310,10 @@ result<cosy_material> build_cosy_material(std::string_view url, cosy_identity co
   auto const payload = codec::base64_encode(envelope.dump());
 
   auto const path = signed_path(url);
-  auto const signature =
-      codec::md5_hex(build_signature_input(payload, *wrapped, unix_seconds, wire_body, path));
+  auto const timestamp = std::to_string(unix_seconds);
+  std::array<std::string_view, 9> const signature_parts{
+      payload, "\n", *wrapped, "\n", timestamp, "\n", wire_body, "\n", path};
+  auto const signature = codec::md5_hex_parts(signature_parts);
 
   cosy_material material;
   material.m_aes_key = key;

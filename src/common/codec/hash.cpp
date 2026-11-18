@@ -33,10 +33,13 @@ void discard_or_throw(EVP_MD_CTX* context) {
   }
 }
 
-std::string digest_hex(EVP_MD const* algorithm, std::span<std::byte const> data) {
+template <class chunks_type>
+std::string digest_hex(EVP_MD const* algorithm, chunks_type const& chunks) {
   auto context = make_context(algorithm);
-  if (!data.empty() && EVP_DigestUpdate(context.get(), data.data(), data.size()) != 1) {
-    throw std::runtime_error("openssl: digest update failed");
+  for (auto const& data : chunks) {
+    if (!data.empty() && EVP_DigestUpdate(context.get(), data.data(), data.size()) != 1) {
+      throw std::runtime_error("openssl: digest update failed");
+    }
   }
   std::array<unsigned char, EVP_MAX_MD_SIZE> buffer{};
   unsigned int length = 0;
@@ -89,7 +92,7 @@ std::string sha256::hex_digest() {
 }
 
 std::string sha256_hex(std::span<std::byte const> data) {
-  return digest_hex(EVP_sha256(), data);
+  return digest_hex(EVP_sha256(), std::array{data});
 }
 
 std::string sha256_hex(std::string_view data) {
@@ -97,11 +100,15 @@ std::string sha256_hex(std::string_view data) {
 }
 
 std::string md5_hex(std::span<std::byte const> data) {
-  return digest_hex(EVP_md5(), data);
+  return digest_hex(EVP_md5(), std::array{data});
 }
 
 std::string md5_hex(std::string_view data) {
   return md5_hex(std::as_bytes(std::span{data}));
+}
+
+std::string md5_hex_parts(std::span<std::string_view const> parts) {
+  return digest_hex(EVP_md5(), parts);
 }
 
 std::string hex_encode(std::span<std::byte const> data) {

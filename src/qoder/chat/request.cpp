@@ -33,7 +33,7 @@ protocol::cosy_identity identity_of(config::account_record const& account) {
 result<signed_request> build_signed_request(upstream_request const& request,
                                             protocol::rsa_key_wrapper const& wrapper,
                                             std::int64_t unix_seconds) {
-  auto const wire_body = protocol::body_encode(request.m_body_json);
+  auto wire_body = protocol::body_encode(request.m_body_json);
 
   std::string url{request.m_site.m_api_base};
   url.append(chat_path);
@@ -45,7 +45,7 @@ result<signed_request> build_signed_request(upstream_request const& request,
   }
 
   signed_request built;
-  built.m_wire_body = wire_body;
+  built.m_wire_body = std::move(wire_body);
   built.m_headers.reserve(material->m_headers.size() + 3);
   for (auto const& header : material->m_headers) {
     // COSY signs an `application/json` request; the stream wants the event-stream media type, and

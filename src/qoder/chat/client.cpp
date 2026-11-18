@@ -65,16 +65,6 @@ chat_client::chat_client(net::http_client& http, protocol::rsa_key_wrapper const
                          clock& time, retry_options options)
     : m_http{http}, m_wrapper{wrapper}, m_time{time}, m_options{options} {}
 
-boost::asio::awaitable<result<std::unique_ptr<net::http_stream>>>
-chat_client::post(signed_request const& request) {
-  net::http_request message;
-  message.m_method = "POST";
-  message.m_url = request.m_url;
-  message.m_headers = request.m_headers;
-  message.m_body = request.m_wire_body;
-  co_return co_await m_http.open(message);
-}
-
 boost::asio::awaitable<result<void>> chat_client::wait(std::chrono::milliseconds delay) {
   asio::steady_timer timer{co_await asio::this_coro::executor, delay};
   auto [ec] = co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
@@ -89,11 +79,18 @@ boost::asio::awaitable<result<void>> chat_client::wait(std::chrono::milliseconds
 }
 
 boost::asio::awaitable<result<std::unique_ptr<chat_stream>>>
-chat_client::open(upstream_request const& request) {
+chat_client::open(upstream_request request) {
   auto signed_request = build_signed_request(request, m_wrapper, m_time.now_ms() / 1000);
+  std::string{}.swap(request.m_body_json);
   if (!signed_request) {
     co_return std::unexpected(std::move(signed_request.error()));
   }
+
+  net::http_request message;
+  message.m_method = "POST";
+  message.m_url = std::move(signed_request->m_url);
+  message.m_headers = std::move(signed_request->m_headers);
+  message.m_body = std::move(signed_request->m_wire_body);
 
   auto const started = std::chrono::steady_clock::now();
   auto const deadline = started + m_options.m_total_budget;
@@ -102,7 +99,7 @@ chat_client::open(upstream_request const& request) {
 
   while (attempt < m_options.m_max_attempts) {
     ++attempt;
-    auto response = co_await post(*signed_request);
+    auto response = co_await m_http.open(message);
     if (!response) {
       co_return std::unexpected(std::move(response.error()));
     }

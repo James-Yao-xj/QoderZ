@@ -32,6 +32,8 @@ private:
 [[nodiscard]] std::string sha256_hex(std::string_view data);
 [[nodiscard]] std::string md5_hex(std::span<std::byte const> data);
 [[nodiscard]] std::string md5_hex(std::string_view data);
+/// MD5 of the concatenated parts, without allocating their concatenation.
+[[nodiscard]] std::string md5_hex_parts(std::span<std::string_view const> parts);
 
 /// Lowercase hex, two characters per byte.
 [[nodiscard]] std::string hex_encode(std::span<std::byte const> data);

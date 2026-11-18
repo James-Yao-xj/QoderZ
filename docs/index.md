@@ -40,7 +40,7 @@
 | [development/style.md](development/style.md) | 命名、East const、auto、constexpr、RAII、分层、日志、预算 |
 | [development/testing.md](development/testing.md) | Catch2 v3、测试组织、stub 上游、端到端测试、性能脚本、禁止真实账号 |
 | [development/cheatsheet.md](development/cheatsheet.md) | 常用命令、关键不变量、版本升级步骤 |
-| [performance.md](performance.md) | 空闲与负载实测值、PSS/anon 口径、复现命令、与 NoQoder 的可比性 |
+| [performance.md](performance.md) | 空闲与负载实测值、内核峰值、请求副本优化、glibc 内存归还策略与复现命令 |
 | [AGENTS.md](../AGENTS.md) | 项目级硬规则与提交信息风格 |
 
 ## 设计与协议

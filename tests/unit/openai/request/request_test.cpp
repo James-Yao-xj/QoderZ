@@ -1,6 +1,7 @@
 #include "common/clock.hpp"
 #include "common/error.hpp"
 #include "common/json.hpp"
+#include "openai/request/body.hpp"
 #include "openai/request/request.hpp"
 #include "openai/request/types.hpp"
 #include "openai/selection/session.hpp"
@@ -11,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -51,6 +53,38 @@ request_context prepare(json const& body, std::optional<std::string_view> header
 }
 
 } // namespace
+
+TEST_CASE("consuming a prepared request preserves translation and retry metadata",
+          "[openai][request][memory]") {
+  session_store store;
+  fake_clock time;
+  auto body = json::parse(R"({"messages":[{"role":"system","content":"instructions"},
+    {"role":"user","content":"placeholder"}],"reasoning_effort":"high",
+    "tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}]})");
+  body["messages"][1]["content"] = std::string(1024 * 1024, 'x');
+  auto prepared = qoderz::openai::read_request(body, "retry-session", store);
+  REQUIRE(prepared.has_value());
+  auto copied = prepare_request(*prepared, fixture_model(), store, time);
+  REQUIRE(copied.has_value());
+  auto const* message_storage = prepared->m_dialog.m_messages.data();
+  auto const* tool_storage = prepared->m_tools.data();
+  auto moved = prepare_request(std::move(*prepared), fixture_model(), store, time);
+  REQUIRE(moved.has_value());
+  CHECK(moved->m_messages.data() == message_storage);
+  CHECK(moved->m_tools.data() == tool_storage);
+  CHECK(prepared->m_dialog.m_messages.empty());
+  CHECK(prepared->m_tools.empty());
+  CHECK(prepared->m_session_id == copied->m_session_id);
+  CHECK(prepared->m_dialog.m_last_user_text.size() == 1024 * 1024);
+  CHECK(prepared->m_dialog.m_first_user_text.empty());
+  CHECK(moved->m_task.m_id == copied->m_task.m_id);
+  moved->m_request_id = copied->m_request_id;
+  auto const expected = qoderz::openai::build_qoder_body(*copied);
+  auto const actual = qoderz::openai::build_qoder_body(*moved);
+  REQUIRE(expected.has_value());
+  REQUIRE(actual.has_value());
+  CHECK(actual->m_json == expected->m_json);
+}
 
 TEST_CASE("A request without messages is a bad request", "[openai][request]") {
   session_store store;

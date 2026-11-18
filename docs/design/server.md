@@ -110,6 +110,17 @@ HTTP 与 CLI 的模型对象**有意不同**，并不是同一个序列化器。
 6. 按目录 key 忽略大小写匹配；找不到 → 400 `unknown or disabled model "<name>"`；
 7. 请求翻译与会话任务准备。
 
+内存所有权逐阶段转移：路由层把 Beast 正文移动给 `chat_http_request`，handler 可消费该正文，
+解析后立即释放字符串；归一化后释放输入 JSON。`prepare_request` 提供消费
+`prepared_request&&` 的重载，把消息、系统文本和工具移入模型上下文；序列化后移回候选请求，
+以支持 auth/quota 时的账户切换。上游客户端接收拥有正文的请求，编码后释放明文；队列重试始终
+复用同一份编码正文与签名，HTTP 发送借用正文直到异步写完成。
+
+`serve` 在 glibc 上默认用 `mallopt(M_TRIM_THRESHOLD, 131072)` 固定归还阈值，同时关闭动态
+`mmap` 阈值提升，避免大请求缓冲释放后仍留在 arena。部署者显式设置相关 `MALLOC_*` 阈值
+或 `GLIBC_TUNABLES` 的 `glibc.malloc.*` 项时，保留该设置。此默认只应用于 `serve`，其它
+分配器与平台仍使用自身策略；不保证消除所有小块碎片。测量方法见 [性能记录](../performance.md)。
+
 ### 5.2 账户选择与 failover
 
 候选来自账户池（见 §6），按顺序尝试：

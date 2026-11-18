@@ -32,7 +32,7 @@ public:
   chat_handler_impl& operator=(chat_handler_impl&&) = delete;
   ~chat_handler_impl() override = default;
 
-  boost::asio::awaitable<result<void>> handle(chat_http_request const& request,
+  boost::asio::awaitable<result<void>> handle(chat_http_request& request,
                                               response_sink& sink) override;
 
 private:
@@ -65,7 +65,7 @@ struct opened_upstream {
 [[nodiscard]] boost::asio::awaitable<result<opened_upstream>>
 open_upstream(account_pool& pool, qoder::catalog::catalog_service& catalog,
               qoder::auth::token_service& tokens, qoder::chat::chat_client& client,
-              openai::selection::session_store& sessions, clock& time, json const& body,
+              openai::selection::session_store& sessions, clock& time, json body,
               std::string_view model, std::string_view session_header);
 
 } // namespace detail

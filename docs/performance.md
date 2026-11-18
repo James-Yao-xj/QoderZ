@@ -64,6 +64,14 @@ stub 上游与网关在同一个进程树里、同一台机器上，网关到上
 | `QODERZ_PERF_REQUESTS` | `100` | 负载脚本请求数 |
 | `QODERZ_PERF_CONCURRENCY` | `8` | 负载脚本并发 |
 | `QODERZ_PERF_BODY_BYTES` | `409600` | 负载脚本文本 body 的字节数 |
+| `QODERZ_PERF_BINARY` | `<build>/qoderz` | 负载脚本的网关二进制，可指向修改前的副本；stub 仍来自构建目录 |
+| `QODERZ_PERF_SAMPLE_SECONDS` | `0.05` | 负载脚本的采样间隔，秒 |
+| `QODERZ_PERF_COOLDOWN_SECONDS` | `6` | 发压结束后的冷却时长，秒 |
+
+负载脚本额外报告 `VmHWM_kB`、`cpu_ms` 与 `wall_ms`。`VmHWM` 来自内核 RSS 高水位，短于采样
+间隔的峰值也会计入；不能用发压中位数代替峰值。CPU 是网关进程的 user + system 时间，读取
+`/proc/<pid>/stat`，按 `CLK_TCK` 换算；wall 包含 curl 与采样调度开销，精度受采样间隔影响。
+脚本校验请求结果，有非 200、curl 失败或响应数不足时返回非零状态。
 
 ## 4. 空闲实测
 
@@ -135,3 +143,190 @@ stub 上游与网关在同一个进程树里、同一台机器上，网关到上
 - 只测了单账户池与单个 loopback 上游。多账户、真实上游延迟、TLS 终止、长时间稳定性（内存是否随天数增长）都没有覆盖，不在本次测量的范围内。
 - 负载脚本用外部 `curl` 发压，测的是服务端驻留内存，不含客户端；客户端自身的内存与 fd 不计入。
 - 数值与硬件强相关。换机器、换编译器、换 glibc 版本后应重跑脚本并更新本文，而不是沿用旧数字。
+
+## 8. 大请求时的内存归还
+
+本节保留优化前的排查记录；第 9 节记录当前实现、默认归还策略与同机前后对比。下文的副本清单和
+手动环境变量建议对应旧实现。第 5 节只压了 400 KiB 的 body，那时分配器保留的空闲块只有 29 MiB，
+看不出问题。真实网关会收到几十个 MiB 的 prompt（上限 32 MiB），这时 glibc 的默认行为值得单独说清楚。
+
+### 8.1 现象
+
+用 4 MiB body 打 36 个请求、并发 3，等进程完全静置后再采样：
+
+| 配置 | 静置后 `RssAnon` |
+| --- | --- |
+| glibc 默认 | 99 MB |
+| glibc 且固定 `MALLOC_TRIM_THRESHOLD_=131072` | 2.7 MB |
+
+进程静置后仍握着 99 MB，其中没有任何一次请求在用——这是分配器的保留策略，不是泄漏。
+
+### 8.2 机制
+
+glibc 的 `mmap` 阈值是**动态**的：一次大的 `malloc` + `free` 会让它抬到这次请求的大小，之后同样大小的
+分配就走主 arena（`brk` / 每线程 arena）而不是 `mmap`。arena 里的空闲块只有在请求到达
+`M_TOP_PAD` / `trim_threshold` 边界时才会被交还给内核，而这个阈值同样会被动态抬高。两者叠加的结果是：
+
+1. 第一个大请求把阈值顶上去；
+2. 之后每个大请求都从 arena 里切，`free` 之后块留在进程里；
+3. 阈值已经很高，进程再也不会主动 `brk` 回缩。
+
+`MALLOC_ARENA_MAX=2` 不能解决这个问题（实测反而更糟，193 MB），因为它限制的是 arena 数量，不是归还策略。
+
+### 8.3 实测对比
+
+同一份 Release 二进制，只用 `LD_PRELOAD` 换分配器；4 MiB body × 60 请求、并发 3，发压结束后静置 6 秒采样：
+
+| 配置 | 静置后 `RssAnon` | 相对默认的 CPU 开销 |
+| --- | --- | --- |
+| glibc 默认 | 78 MB | — |
+| **glibc + `MALLOC_TRIM_THRESHOLD_=131072`** | **2.7 MB** | 大 body 上约 +8%，小 body 上无可测差异 |
+| jemalloc 默认 | 111 MB | 略快 |
+| jemalloc `dirty_decay_ms:0,muzzy_decay_ms:0` | 5.3 MB | 大 body 上约 +18% |
+| mimalloc 默认 | 215 MB | 略快 |
+| mimalloc `PURGE_DELAY=0` | 31 MB | 大 body 上约 +42% |
+| snmalloc | 237 MB | 略快 |
+| tcmalloc `RELEASE_RATE=1.0` | 195 MB | 略快 |
+
+固定 `mmap` 阈值与固定 `trim` 阈值效果几乎相同（2.7 MB vs 2.8 MB），只设 `MALLOC_TRIM_THRESHOLD_` 一个
+变量就够了，不需要 `LD_PRELOAD`、不引入依赖、不改代码。
+
+### 8.4 代价
+
+固定阈值让每个大块都走 `mmap` / `munmap`，缺页次数大幅上升。用 16 MiB body 测 4 轮取中位数：
+
+| 配置 | CPU 中位数 | 静置后 `RssAnon` |
+| --- | --- | --- |
+| glibc 默认 | 7340 ms | 564 MB |
+| glibc + trim 阈值 | 8920 ms | 2.7 MB |
+| jemalloc decay=0 | 8640 ms | 5.8 MB |
+
+也就是**用约 20% 的大请求 CPU 换掉 560 MB 的常驻**。这是有意义的交换：大 prompt 的处理本来就是
+CPU 密集的 JSON 解析与加密，多这 20% 不会让请求超时；而少掉的几百 MiB 是常驻的、每天 24 小时都在的。
+
+小请求不受影响：100 KB body × 600 请求、并发 8 时，固定阈值的 wall time 是 453 ms、默认是 475 ms，
+CPU 1300 ms 对 1360 ms——差异在噪声内，方向甚至略好。
+
+### 8.5 上限
+
+32 MiB body（等于默认 `--max-body-bytes`）单并发时，两套配置的**峰值**都在 380–410 MB，即 body 的
+12–13 倍；两并发时都在 745–865 MB。峰值由"一次请求需要多少份 body"决定，与分配器无关：
+
+- Beast 的 `string_body` 持有一份；
+- `server.cpp:218` 把 `request.body()` 复制进 `chat_http_request::m_body`，第二份；
+- `chat.cpp:42` 解析成 `nlohmann::json` 树，第三份且显著更大；
+- 转译出的上游 body 再一份。
+
+要压峰值只能减少这些副本，光换分配器或调阈值做不到。当前默认的单机 32 MiB 上限配合这两三百 MiB 的
+峰值是合理的；如果哪天要放宽上限，这几份副本必须先合并。
+
+### 8.6 建议
+
+在 systemd unit 里加一个环境变量即可：
+
+```ini
+Environment="MALLOC_TRIM_THRESHOLD_=131072"
+```
+
+不改代码、不加依赖、不影响小请求快路径。要继续优化峰值则需要改代码，见 8.5。
+
+## 9. 请求峰值与内存归还修复
+
+### 9.1 减少同时存活的大块缓冲
+
+这次修改覆盖接收、翻译、签名和发送整条链路：
+
+- Beast 正文移动给 handler；解析后释放原始字符串，归一化后释放输入 JSON，不把它们留到响应结束。
+- 归一化读取借用 JSON 内容，工具调用与临时文本使用移动；派生 session id 后释放首条用户文本副本。
+- 模型上下文消费归一化消息、工具和系统文本，序列化后移回候选请求，账户切换复用这一份数据。
+- JSON 消息和工具移动进上游 envelope。长度计算使用计数 streambuf，不再通过 `dump().size()`
+  分配整份临时文本；复用消息和工具的长度，只另算小 envelope，准确预留最终字符串空间。
+- 会话 SHA-256 与 COSY MD5 分段计算，保留原字节顺序和长度前缀，不再拼接包含整份正文的哈希输入。
+- BodyCodec 结果直接移动到 HTTP 请求；编码后释放明文，队列重试复用同一正文与签名。
+  Beast 发送使用 `span_body<char const>` 借用正文，拥有者一直活到异步发送和连接重试结束。
+
+字段顺序、UTF-8、转义、`content` / `contents` 双写、上下文窗口字节计算、签名及重试规则均保持原语义。
+新增回归覆盖消费接口、正文释放、大正文的队列重试和账户切换，以及转义后的准确字节数。
+
+### 9.2 默认约束 glibc 的保留策略
+
+`qoderz serve` 在创建工作线程前调用 `mallopt(M_TRIM_THRESHOLD, 131072)`。glibc 在显式设置此阈值时
+也关闭动态 `mmap` 阈值提升，让后续的大块缓冲更稳定地通过 `mmap` 分配，并在释放时归还给内核。
+不需要后台回收线程、逐请求 `malloc_trim`，也不新增分配器依赖。非 glibc 平台保持原分配策略。
+
+显式的 `MALLOC_TRIM_THRESHOLD_`、`MALLOC_MMAP_THRESHOLD_`、`MALLOC_MMAP_MAX_`、`MALLOC_TOP_PAD_`
+优先；`GLIBC_TUNABLES` 中存在 `glibc.malloc.*` 项时也保留部署者的策略。其它命令不修改分配策略。
+已有 systemd trim 环境变量可继续保留；新默认不要求它。
+
+这解决的是本次复现的“大请求释放后 arena 长期保留大块空闲内存”。小块分配、长寿命对象夹住空闲页、
+线程缓存与其它分配器仍可能造成碎片和少量保留；这里不承诺任意负载结束后都回到启动时的 RSS。
+
+### 9.3 同机对比与复现
+
+对照二进制来自修改前的 `17b1e03`，在修改源码前保存为 `build-perf/qoderz-baseline`。
+两边均为 GCC 14.4.0、Release、4 个工作线程，使用同一 loopback stub、假凭据、默认 32 MiB body 上限。
+本轮内核为 Linux 6.18.63 x86_64；CPU 与虚拟机同第 1 节。测试仅使用合成文本。
+
+正文接近上限的场景使用 33,553,000 字节文本，加 JSON 后 33,553,103 字节，略低于 32 MiB，避免把
+413 拒绝路径误计作优化收益。峰值使用 `VmHWM`，冷却 6 秒后的保留量使用 `Anonymous`；单位均为 MiB
+（脚本 KiB 除以 1024）。小正文与 4 MiB 场景各运行三轮、逐指标取中位数；近 32 MiB 单并发的新程序
+也重复三轮并报告范围，其余近上限对照为单轮。
+
+近上限场景的旧程序经过多个请求后还保留了前几次的大块空闲页，因此本轮 `VmHWM` 可以高于第 8 节
+的旧采样结果；单次处理的副本放大和多次请求的分配器保留会叠加。两者需要同时处理。
+
+| 场景（文本 / 请求数 / 并发） | 旧峰值 RSS | 新峰值 RSS | 旧冷却后 Anonymous | 新冷却后 Anonymous |
+| --- | ---: | ---: | ---: | ---: |
+| 100 KiB / 600 / 8，三轮中位数 | 22.3 | 18.1 | 10.0 | 4.8 |
+| 4 MiB / 60 / 3，三轮中位数 | 235.6 | 64.3 | 158.3 | 2.7 |
+| 近 32 MiB / 6 / 1 | 812.7 | 150.5–182.6 | 533.4 | 2.5–34.3 |
+| 近 32 MiB / 6 / 2 | 940.1 | 289.2 | 597.4 | 2.5 |
+
+全部正常负载请求均返回 200。4 MiB 场景峰值下降约 72.7%；近上限单并发峰值下降约 77.5%–81.5%，
+两并发下降约 69.2%。近上限单并发有两轮冷却后仍保留约 34 MiB，一轮约 2.5 MiB；本轮没有进一步
+证明这部分全部属于空闲碎片，因此只记录现象，不把它当成已根治的泄漏或碎片问题。
+
+CPU 与 wall 对照如下。CPU 是网关消耗；大正文的 curl 默认 `Expect: 100-continue` 等待会影响 wall，
+不能直接把此表的 wall 推导成真实上游吞吐。构建等其它任务也会影响调度，本表只支持本机趋势判断。
+
+| 场景 | 旧 CPU ms | 新 CPU ms | 旧 wall ms | 新 wall ms |
+| --- | ---: | ---: | ---: | ---: |
+| 100 KiB / 600 / 8，三轮中位数 | 1310 | 1320 | 519 | 517 |
+| 4 MiB / 60 / 3，三轮中位数 | 5070 | 5130 | 21987 | 22074 |
+| 近 32 MiB / 6 / 1，新程序三轮中位数 | 4260 | 3940 | 10445 | 10044 |
+| 近 32 MiB / 6 / 2 | 5640 | 3790 | 6200 | 5193 |
+
+小正文与 4 MiB 场景 CPU 分别约 +0.8%、+1.2%，没有复现第 8 节只调分配器时的大幅额外开销；
+近上限请求减少副本后 CPU 也下降。这里没有做统计显著性检验，不把小幅变化解释为稳定加速或退化。
+
+为了区分代码优化和分配器策略，另外做了两组单轮对照：
+
+- 旧程序显式设置 `MALLOC_TRIM_THRESHOLD_=131072`，近 32 MiB / 6 / 1 的峰值仍有 **395.8 MiB**，
+  冷却后匿名内存约 2.5 MiB、CPU 5230 ms。说明仅调分配器能归还内存，消除副本才能进一步压低峰值。
+- 新程序显式设置 `GLIBC_TUNABLES=glibc.malloc.tcache_count=7`，应用保留部署者策略，跳过默认
+  `mallopt`。4 MiB / 60 / 3 冷却后匿名内存约 **109.7 MiB**，而默认三轮中位数为 2.7 MiB。
+  减少副本本身不能保证 glibc 主动归还空闲页。
+
+复现命令（从项目根目录、在 devShell 中运行）：
+
+```sh
+# 修改源码前保存基线二进制；不要在优化后二进制上覆盖这个副本。
+cmake -S . -B build-perf -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+cmake --build build-perf --parallel 4
+cp build-perf/qoderz build-perf/qoderz-baseline
+
+# 应用修改并重新构建后，同一脚本分别驱动两份二进制。
+QODERZ_PERF_BINARY="$PWD/build-perf/qoderz-baseline" \
+  QODERZ_PERF_BODY_BYTES=4194304 QODERZ_PERF_REQUESTS=60 QODERZ_PERF_CONCURRENCY=3 \
+  ./scripts/measure-load.sh --no-build
+QODERZ_PERF_BODY_BYTES=4194304 QODERZ_PERF_REQUESTS=60 QODERZ_PERF_CONCURRENCY=3 \
+  ./scripts/measure-load.sh --no-build
+
+# 近上限正文；并发对照把 CONCURRENCY 改成 2。
+QODERZ_PERF_BODY_BYTES=33553000 QODERZ_PERF_REQUESTS=6 QODERZ_PERF_CONCURRENCY=1 \
+  ./scripts/measure-load.sh --no-build
+```
+
+本次还确认：文本恰好 32 MiB 时加上 JSON 外壳会触发 413，测量脚本返回失败；请求数为 0、采样
+间隔为 0 也会在启动服务前拒绝。Debug 全量 CTest 756 项、格式与代码预算门禁均通过。没有覆盖真实
+上游、TLS 大正文吞吐或数日持续运行；请求数与并发、JSON 树节点数量仍会影响总内存上限。

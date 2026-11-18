@@ -210,12 +210,11 @@ asio::awaitable<bool> send_json(beast::tcp_stream& stream, unsigned version, boo
   co_return sent.has_value() && keep_alive;
 }
 
-asio::awaitable<bool> handle_chat(server::state& self,
-                                  http::request<http::string_body> const& request,
+asio::awaitable<bool> handle_chat(server::state& self, http::request<http::string_body>& request,
                                   beast::tcp_stream& stream, bool keep_alive) {
   connection_writer writer{stream, request.version(), keep_alive};
   chat_http_request chat;
-  chat.m_body = request.body();
+  chat.m_body = std::move(request.body());
   chat.m_stream = wants_stream(chat.m_body);
   chat.m_session_id = session_id_of(request);
 
@@ -241,8 +240,7 @@ asio::awaitable<bool> handle_chat(server::state& self,
 
 /// One request, from the route table to the answer. The returned flag says whether the connection
 /// may serve another request; every path that could leave unread bytes on the wire says no.
-asio::awaitable<bool> handle_request(server::state& self,
-                                     http::request<http::string_body> const& request,
+asio::awaitable<bool> handle_request(server::state& self, http::request<http::string_body>& request,
                                      beast::tcp_stream& stream, bool keep_alive) {
   auto const match = match_route(request.method_string(), request.target());
   log(log_level::debug, "request",
@@ -311,7 +309,7 @@ asio::awaitable<void> serve_connection(std::shared_ptr<server::state> self, sess
       co_return;
     }
 
-    auto const& request = parser.get();
+    auto& request = parser.get();
     bool const keep_alive = request.keep_alive();
     slot.begin_request();
     bool const reusable = co_await handle_request(*self, request, stream, keep_alive);

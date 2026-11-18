@@ -93,7 +93,10 @@ curl -s http://127.0.0.1:8788/v1/chat/completions \
 ./scripts/measure-load.sh    # 负载：400 KB 文本 body、100 请求、并发 8，外部 curl 发压
 ```
 
-方法与实测数值见 [docs/performance.md](docs/performance.md)。
+负载脚本同时报告内核 `VmHWM` 峰值、发压 CPU 时间与冷却后内存，便于比较大请求的内存放大。
+`serve` 在 glibc 上默认固定内存归还阈值，避免大请求结束后 arena 长期保留大块内存；显式的
+`MALLOC_*` 阈值设置或 `GLIBC_TUNABLES` 中的 `glibc.malloc.*` 设置优先。方法、边界与实测对比见
+[docs/performance.md](docs/performance.md)。
 
 ## 测试
 

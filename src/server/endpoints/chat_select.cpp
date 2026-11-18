@@ -147,13 +147,14 @@ boost::asio::awaitable<void> collect_ready(account_pool& pool, catalog::catalog_
 boost::asio::awaitable<result<opened_upstream>>
 open_upstream(account_pool& pool, qoder::catalog::catalog_service& catalog,
               qoder::auth::token_service& tokens, qoder::chat::chat_client& client,
-              openai::selection::session_store& sessions, clock& time, json const& body,
+              openai::selection::session_store& sessions, clock& time, json body,
               std::string_view model, std::string_view session_header) {
   // §4.1 derives the session id from the header and the body alone, so it exists before a model is
   // known: §6.3 then binds the account by the very value the request translation records in the
   // task table. A blank header is no header — `make_session_id` trims it and falls through.
   auto prepared =
       openai::read_request(body, std::optional<std::string_view>{session_header}, sessions);
+  body = nullptr;
   if (!prepared) {
     co_return std::unexpected(std::move(prepared.error()));
   }
@@ -175,7 +176,7 @@ open_upstream(account_pool& pool, qoder::catalog::catalog_service& catalog,
   }
 
   for (auto const& entry : ready) {
-    auto context = openai::prepare_request(*prepared, entry.m_model, sessions, time);
+    auto context = openai::prepare_request(std::move(*prepared), entry.m_model, sessions, time);
     if (!context) {
       co_return std::unexpected(std::move(context.error()));
     }
@@ -191,7 +192,11 @@ open_upstream(account_pool& pool, qoder::catalog::catalog_service& catalog,
     upstream.m_model_key = entry.m_model.m_key;
     upstream.m_model_source = entry.m_model.m_source;
 
-    auto stream = co_await client.open(upstream);
+    // Keep one normalized payload for account failover, rather than a copy in every context.
+    prepared->m_dialog.m_messages = std::move(context->m_messages);
+    prepared->m_tools = std::move(context->m_tools);
+    prepared->m_system_text = std::move(context->m_system_text);
+    auto stream = co_await client.open(std::move(upstream));
     if (!stream) {
       auto failure = std::move(stream.error());
       if (!report_if_cooling(pool, *entry.m_account, "open", failure)) {

@@ -187,11 +187,12 @@ connection::open(parsed_url const& url, std::chrono::milliseconds connect_timeou
 boost::asio::awaitable<result<void>> connection::send(parsed_url const& url,
                                                       http_request const& request,
                                                       std::chrono::milliseconds timeout) {
-  http::request<http::string_body> message;
+  // The caller owns the body until async_write completes, including a pooled-connection retry.
+  http::request<http::span_body<char const>> message;
   message.method_string(request.m_method);
   message.target(url.m_target);
   message.version(11);
-  message.body() = request.m_body;
+  message.body() = {request.m_body.data(), request.m_body.size()};
   for (auto const& header : request.m_headers) {
     message.set(header.m_name, header.m_value);
   }

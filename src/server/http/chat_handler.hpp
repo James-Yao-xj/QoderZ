@@ -10,8 +10,8 @@ namespace qoderz::server {
 
 /// One chat request as the router hands it over.
 ///
-/// Parsing and validating the JSON body is the handler's job, because only it knows which fields it
-/// needs; the router only enforces the size limit and extracts the session header.
+/// Parsing and validating the JSON body is the handler's job. The router transfers ownership of the
+/// body so the handler can release it after parsing, before preparing the upstream request.
 struct chat_http_request {
   std::string m_body;
   std::string m_session_id;
@@ -32,7 +32,7 @@ public:
   chat_handler& operator=(chat_handler&&) = delete;
   virtual ~chat_handler() = default;
 
-  virtual boost::asio::awaitable<result<void>> handle(chat_http_request const& request,
+  virtual boost::asio::awaitable<result<void>> handle(chat_http_request& request,
                                                       response_sink& sink) = 0;
 };
 

@@ -20,21 +20,21 @@ namespace {
 constexpr std::size_t session_hash_length = 32;
 constexpr std::size_t task_name_scalars = 10;
 
-void append_framed(std::string& buffer, std::string_view value) {
+void append_framed(codec::sha256& buffer, std::string_view value) {
   auto const size = static_cast<std::uint32_t>(value.size());
-  buffer.push_back(static_cast<char>(size & 0xFFU));
-  buffer.push_back(static_cast<char>((size >> 8U) & 0xFFU));
-  buffer.push_back(static_cast<char>((size >> 16U) & 0xFFU));
-  buffer.push_back(static_cast<char>((size >> 24U) & 0xFFU));
-  buffer.append(value);
+  std::array<char, 4> const length{
+      static_cast<char>(size & 0xFFU), static_cast<char>((size >> 8U) & 0xFFU),
+      static_cast<char>((size >> 16U) & 0xFFU), static_cast<char>((size >> 24U) & 0xFFU)};
+  buffer.update(std::string_view{length.data(), length.size()});
+  buffer.update(value);
 }
 
-void append_index(std::string& buffer, int value) {
+void append_index(codec::sha256& buffer, int value) {
   auto const bits = static_cast<std::uint32_t>(value);
-  buffer.push_back(static_cast<char>(bits & 0xFFU));
-  buffer.push_back(static_cast<char>((bits >> 8U) & 0xFFU));
-  buffer.push_back(static_cast<char>((bits >> 16U) & 0xFFU));
-  buffer.push_back(static_cast<char>((bits >> 24U) & 0xFFU));
+  std::array<char, 4> const bytes{
+      static_cast<char>(bits & 0xFFU), static_cast<char>((bits >> 8U) & 0xFFU),
+      static_cast<char>((bits >> 16U) & 0xFFU), static_cast<char>((bits >> 24U) & 0xFFU)};
+  buffer.update(std::string_view{bytes.data(), bytes.size()});
 }
 
 std::string as_uuid_shape(std::string const& hex) {
@@ -75,12 +75,11 @@ std::string task_name(std::string_view prompt) {
 
 std::string turn_key(std::string_view session_id, int last_user_index,
                      std::string_view last_user_text) {
-  std::string buffer;
-  buffer.reserve(session_id.size() + last_user_text.size() + 8);
+  codec::sha256 buffer;
   append_framed(buffer, session_id);
   append_index(buffer, last_user_index);
   append_framed(buffer, last_user_text);
-  return codec::sha256_hex(buffer);
+  return buffer.hex_digest();
 }
 
 std::string_view trimmed_or_empty(std::optional<std::string_view> value) {
@@ -124,7 +123,7 @@ std::string session_store::make_session_id(std::optional<std::string_view> named
                                            std::optional<std::string_view> user,
                                            std::string_view system_text,
                                            std::string_view first_user_text) const {
-  std::string buffer;
+  codec::sha256 buffer;
 
   auto const named_text = trimmed_or_empty(named);
   auto const key_text = trimmed_or_empty(cache_key);
@@ -147,7 +146,7 @@ std::string session_store::make_session_id(std::optional<std::string_view> named
     append_framed(buffer, first_user_text);
   }
 
-  return as_uuid_shape(codec::sha256_hex(buffer));
+  return as_uuid_shape(buffer.hex_digest());
 }
 
 chat_task session_store::get_or_create(std::string_view session_id, int last_user_index,

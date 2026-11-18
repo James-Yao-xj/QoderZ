@@ -1,4 +1,6 @@
+#include "common/json.hpp"
 #include "common/net/http_client.hpp"
+#include "protocol/body_codec.hpp"
 #include "qoder/chat/client.hpp"
 #include "support/async_test.hpp"
 #include "unit/qoder/chat/chat_test_support.hpp"
@@ -39,7 +41,10 @@ TEST_CASE("a queued 503 is retried with the identical signed request",
   fake_clock time;
   chat_client client{http, wrapper, time, tight_budget(5)};
 
-  auto outcome = run_awaitable(io, open_and_drain(client, make_request(server)), 30s);
+  auto request = make_request(server);
+  request.m_body_json = qoderz::json{{"prompt", std::string(1024 * 1024, 'x')}}.dump();
+  auto const expected_body = qoderz::protocol::body_encode(request.m_body_json);
+  auto outcome = run_awaitable(io, open_and_drain(client, std::move(request)), 30s);
   REQUIRE(outcome.has_value());
   REQUIRE(outcome->has_value());
   CHECK(outcome->value().m_events.back().m_kind == chat_event_kind::stop);
@@ -47,6 +52,7 @@ TEST_CASE("a queued 503 is retried with the identical signed request",
   REQUIRE(stub.m_requests.size() == 2);
   auto const& first = stub.m_requests[0];
   auto const& second = stub.m_requests[1];
+  CHECK(first.m_body == expected_body);
   CHECK(first.m_body == second.m_body);
   CHECK(*find_header(first.m_headers, "Authorization") ==
         *find_header(second.m_headers, "Authorization"));

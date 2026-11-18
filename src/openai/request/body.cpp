@@ -4,8 +4,11 @@
 #include "openai/selection/selectors.hpp"
 
 #include <cstddef>
+#include <ostream>
+#include <streambuf>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace qoderz::openai {
 namespace {
@@ -19,6 +22,67 @@ constexpr std::string_view session_type = "app";
 constexpr std::size_t empty_tools_bytes = 2;
 
 using ordered_json = nlohmann::ordered_json;
+
+/// A stream sink used for the sizing pass. nlohmann's stream serializer writes directly to the
+/// stream buffer, so this counts encoded bytes without first materialising another string.
+class counting_streambuf final : public std::streambuf {
+public:
+  [[nodiscard]] std::size_t size() const noexcept { return m_size; }
+
+protected:
+  std::streamsize xsputn(char const*, std::streamsize count) override {
+    m_size += static_cast<std::size_t>(count);
+    return count;
+  }
+
+  int_type overflow(int_type character = traits_type::eof()) override {
+    if (!traits_type::eq_int_type(character, traits_type::eof())) {
+      ++m_size;
+    }
+    return traits_type::not_eof(character);
+  }
+
+private:
+  std::size_t m_size = 0;
+};
+
+/// A stream sink for the final pass. The caller reserves the exact serialized size first, so the
+/// append operations do not need a geometric growth buffer or a second complete JSON string.
+class string_streambuf final : public std::streambuf {
+public:
+  explicit string_streambuf(std::string& output) : m_output{output} {}
+
+protected:
+  std::streamsize xsputn(char const* data, std::streamsize count) override {
+    m_output.append(data, static_cast<std::size_t>(count));
+    return count;
+  }
+
+  int_type overflow(int_type character = traits_type::eof()) override {
+    if (!traits_type::eq_int_type(character, traits_type::eof())) {
+      m_output.push_back(traits_type::to_char_type(character));
+    }
+    return traits_type::not_eof(character);
+  }
+
+private:
+  std::string& m_output;
+};
+
+std::size_t serialized_size(ordered_json const& value) {
+  counting_streambuf buffer;
+  std::ostream output{&buffer};
+  output.exceptions(std::ios::badbit | std::ios::failbit);
+  output << value;
+  return buffer.size();
+}
+
+void serialize(ordered_json const& value, std::string& output) {
+  string_streambuf buffer{output};
+  std::ostream stream{&buffer};
+  stream.exceptions(std::ios::badbit | std::ios::failbit);
+  stream << value;
+}
 
 // A listing that cannot be read back is better as `{}` than as a failed request.
 ordered_json parse_model_config(std::string const& raw) {
@@ -121,10 +185,10 @@ ordered_json write_tools(std::vector<tool_spec> const& tools) {
 result<built_body> build_qoder_body(request_context const& context) {
   built_body built;
 
-  auto const messages = write_messages(context);
-  auto const messages_bytes = messages.dump().size();
-  auto const tools = context.m_include_tools ? write_tools(context.m_tools) : ordered_json::array();
-  auto const tools_bytes = context.m_include_tools ? tools.dump().size() : empty_tools_bytes;
+  auto messages = write_messages(context);
+  auto const messages_bytes = serialized_size(messages);
+  auto tools = context.m_include_tools ? write_tools(context.m_tools) : ordered_json::array();
+  auto const tools_bytes = context.m_include_tools ? serialized_size(tools) : empty_tools_bytes;
 
   auto const context_length =
       selection::select_window(context.m_model, messages_bytes, tools_bytes, context.m_max_tokens);
@@ -160,13 +224,23 @@ result<built_body> build_qoder_body(request_context const& context) {
   body["model_config"] = parse_model_config(context.m_model.m_raw_json);
   body["system"] =
       ordered_json::array({ordered_json{{"type", "text"}, {"text", context.m_system_text}}});
-  body["messages"] = messages;
+  body["messages"] = ordered_json::array();
   if (context.m_include_tools) {
-    body["tools"] = tools;
+    body["tools"] = ordered_json::array();
   }
   body["parameters"] = std::move(parameters);
 
-  built.m_json = body.dump();
+  // The large arrays were already counted for window selection. Size only the small envelope here,
+  // then replace its empty-array placeholders without changing the protocol's field order.
+  auto const envelope_bytes = serialized_size(body);
+  auto const body_bytes = envelope_bytes + messages_bytes - empty_tools_bytes +
+                          (context.m_include_tools ? tools_bytes - empty_tools_bytes : 0);
+  built.m_json.reserve(body_bytes);
+  body["messages"] = std::move(messages);
+  if (context.m_include_tools) {
+    body["tools"] = std::move(tools);
+  }
+  serialize(body, built.m_json);
   built.m_context_length = context_length > 0 ? context_length : 0;
   return built;
 }

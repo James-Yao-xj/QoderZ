@@ -32,6 +32,22 @@ void check_failed_head(qoderz::error failure, error_kind expected) {
 
 } // namespace
 
+TEST_CASE("the handler releases the input body before answering", "[server][chat][memory]") {
+  fixture scope;
+  auto handler = scope.make_handler();
+  for (auto const valid : {true, false}) {
+    recording_sink sink;
+    chat_http_request request;
+    request.m_body = valid ? body_of("ultimate", false) : "{";
+    request.m_body.reserve(1024 * 1024);
+    auto outcome = run_awaitable(scope.m_io, handler.handle(request, sink));
+    REQUIRE(outcome.has_value());
+    CHECK(outcome->has_value() == valid);
+    CHECK(request.m_body.empty());
+    CHECK(request.m_body.capacity() < 1024);
+  }
+}
+
 TEST_CASE("a stream fails over from a quota answer and sticks to the second account",
           "[server][chat]") {
   fixture scope{{"ada", "bob"}};
@@ -70,7 +86,11 @@ TEST_CASE("a stream fails over from a quota answer and sticks to the second acco
 TEST_CASE("a non-streaming request fails over and writes exactly one body", "[server][chat]") {
   fixture scope{{"ada", "bob"}};
   scope.chat("ada", 429, R"({"code":110,"message":"quota exhausted"})");
-  auto done = ask(scope, "ultimate", false, "session-2");
+  auto body = json::parse(body_of("ultimate", false, std::string(1024 * 1024, 'x')));
+  body["tools"] =
+      json::array({json{{"type", "function"},
+                        {"function", {{"name", "lookup"}, {"parameters", {{"type", "object"}}}}}}});
+  auto done = deliver(scope, body.dump(), "session-2");
   REQUIRE(done.m_outcome.has_value());
   CHECK(done.sink().m_started);
   CHECK_FALSE(done.sink().m_streaming);
@@ -80,7 +100,19 @@ TEST_CASE("a non-streaming request fails over and writes exactly one body", "[se
   auto const document = json::parse(done.sink().m_json_body, nullptr, false);
   CHECK(document.at("object") == "chat.completion");
   CHECK(document.at("choices").at(0).at("message").at("content") == "Hello world");
-  CHECK(scope.chat_calls() == 2);
+  REQUIRE(scope.chat_calls() == 2);
+  auto const first = scope.sent_body(0);
+  auto const second = scope.sent_body(1);
+  CHECK(first.at("messages") == second.at("messages"));
+  CHECK(first.at("system") == second.at("system"));
+  CHECK(first.at("tools") == second.at("tools"));
+  CHECK(second.at("messages")
+            .at(1)
+            .at("content")
+            .at(0)
+            .at("text")
+            .get_ref<std::string const&>()
+            .size() == 1024 * 1024);
 }
 
 TEST_CASE("an error after the first frame never moves to another account", "[server][chat]") {

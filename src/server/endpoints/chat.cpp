@@ -38,8 +38,9 @@ void strip_site_prefix(std::string& model, std::string_view site_id) {
   model = strings::trim(std::string_view{model}.substr(site_id.size() + 1));
 }
 
-result<parsed_chat> parse_chat(chat_http_request const& request, std::string_view site_id) {
+result<parsed_chat> parse_chat(chat_http_request& request, std::string_view site_id) {
   auto body = json::parse(request.m_body, nullptr, false);
+  std::string{}.swap(request.m_body);
   if (body.is_discarded()) {
     return std::unexpected(bad_request_error(std::string{invalid_json_message}));
   }
@@ -216,16 +217,16 @@ chat_handler_impl::chat_handler_impl(account_pool& pool, qoder::catalog::catalog
     : m_pool{pool}, m_catalog{catalog}, m_tokens{tokens}, m_client{client}, m_sessions{sessions},
       m_time{time}, m_site_id{std::move(site_id)} {}
 
-boost::asio::awaitable<result<void>> chat_handler_impl::handle(chat_http_request const& request,
+boost::asio::awaitable<result<void>> chat_handler_impl::handle(chat_http_request& request,
                                                                response_sink& sink) {
   auto parsed = parse_chat(request, m_site_id);
   if (!parsed) {
     co_return std::unexpected(std::move(parsed.error()));
   }
 
-  auto opened =
-      co_await detail::open_upstream(m_pool, m_catalog, m_tokens, m_client, m_sessions, m_time,
-                                     parsed->m_body, parsed->m_model, request.m_session_id);
+  auto opened = co_await detail::open_upstream(m_pool, m_catalog, m_tokens, m_client, m_sessions,
+                                               m_time, std::move(parsed->m_body), parsed->m_model,
+                                               request.m_session_id);
   if (!opened) {
     co_return std::unexpected(std::move(opened.error()));
   }

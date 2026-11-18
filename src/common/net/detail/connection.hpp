@@ -32,7 +32,8 @@ public:
 
   [[nodiscard]] bool is_tls() const noexcept;
 
-  /// Writes one request. A failure leaves the connection unusable, so the caller drops it.
+  /// Writes one request, borrowing its body until completion. Keep `request` alive and unchanged
+  /// while awaiting this call. A failure leaves the connection unusable, so the caller drops it.
   boost::asio::awaitable<result<void>> send(parsed_url const& url, http_request const& request,
                                             std::chrono::milliseconds timeout);
 

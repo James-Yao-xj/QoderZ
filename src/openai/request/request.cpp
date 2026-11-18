@@ -148,8 +148,8 @@ std::string build_system_text(json const& messages, bool include_tools,
     if (role != "system" && role != "developer") {
       continue;
     }
-    auto const part = read_text_content(
-        message.find("content") == message.end() ? json{} : *message.find("content"));
+    auto const content = message.find("content");
+    auto const part = content == message.end() ? std::string{} : read_text_content(*content);
     if (part.empty()) {
       continue;
     }
@@ -168,6 +168,28 @@ std::string build_system_text(json const& messages, bool include_tools,
     text.append(required_tools_line);
   }
   return text;
+}
+
+template <class prepared_type>
+result<request_context> prepare_request_impl(prepared_type&& prepared,
+                                             qoder::catalog::model_info const& model,
+                                             selection::session_store& sessions, clock& time) {
+  request_context context;
+  context.m_model = model;
+  context.m_system_text = std::forward<prepared_type>(prepared).m_system_text;
+  context.m_session_id = prepared.m_session_id;
+
+  auto const effort = selection::select_effort(model, prepared.m_requested_effort);
+  context.m_enable_thinking = effort.m_enable_thinking;
+  context.m_reasoning_effort = effort.m_effort;
+  context.m_max_tokens = prepared.m_max_tokens;
+  context.m_tools = std::forward<prepared_type>(prepared).m_tools;
+  context.m_include_tools = prepared.m_include_tools;
+  context.m_messages = std::forward<prepared_type>(prepared).m_dialog.m_messages;
+  context.m_task = sessions.get_or_create(context.m_session_id, prepared.m_dialog.m_last_user_index,
+                                          prepared.m_dialog.m_last_user_text, time.now_ms());
+  context.m_request_id = selection::make_uuid();
+  return context;
 }
 
 } // namespace
@@ -197,7 +219,7 @@ result<prepared_request> read_request(json const& body,
   auto const user = read_trimmed_string(body, "user");
   prepared.m_session_id = sessions.make_session_id(
       session_header, cache_key, user, prepared.m_system_text, prepared.m_dialog.m_first_user_text);
-
+  std::string{}.swap(prepared.m_dialog.m_first_user_text);
   prepared.m_requested_effort = read_trimmed_string(body, "reasoning_effort");
   prepared.m_max_tokens = read_max_tokens(body);
   return prepared;
@@ -206,22 +228,13 @@ result<prepared_request> read_request(json const& body,
 result<request_context> prepare_request(prepared_request const& prepared,
                                         qoder::catalog::model_info const& model,
                                         selection::session_store& sessions, clock& time) {
-  request_context context;
-  context.m_model = model;
-  context.m_system_text = prepared.m_system_text;
-  context.m_session_id = prepared.m_session_id;
+  return prepare_request_impl(prepared, model, sessions, time);
+}
 
-  auto const effort = selection::select_effort(model, prepared.m_requested_effort);
-  context.m_enable_thinking = effort.m_enable_thinking;
-  context.m_reasoning_effort = effort.m_effort;
-  context.m_max_tokens = prepared.m_max_tokens;
-  context.m_tools = prepared.m_tools;
-  context.m_include_tools = prepared.m_include_tools;
-  context.m_messages = prepared.m_dialog.m_messages;
-  context.m_task = sessions.get_or_create(context.m_session_id, prepared.m_dialog.m_last_user_index,
-                                          prepared.m_dialog.m_last_user_text, time.now_ms());
-  context.m_request_id = selection::make_uuid();
-  return context;
+result<request_context> prepare_request(prepared_request&& prepared,
+                                        qoder::catalog::model_info const& model,
+                                        selection::session_store& sessions, clock& time) {
+  return prepare_request_impl(std::move(prepared), model, sessions, time);
 }
 
 result<request_context> prepare_request(json const& body,
@@ -232,6 +245,7 @@ result<request_context> prepare_request(json const& body,
   if (!prepared) {
     return std::unexpected(std::move(prepared.error()));
   }
-  return prepare_request(*prepared, model, sessions, time);
+  return prepare_request(std::move(*prepared), model, sessions, time);
 }
+
 } // namespace qoderz::openai

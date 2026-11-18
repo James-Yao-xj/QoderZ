@@ -115,7 +115,9 @@ static_assert(qoderz::default_http_status(error_kind::quota) == 429);
 
 - 第一次运行会构建 Release 到 `build-perf/`（可用 `QODERZ_PERF_BUILD_DIR` 改）；`--no-build` 跳过构建。
 - 采样口径：`/proc/<pid>/status` 的 `VmRSS` 与 `Threads`、`/proc/<pid>/smaps_rollup` 的 `Pss` 与 `Anonymous`、`/proc/<pid>/fd` 的条目数。
-- 只统计服务端进程；发压的 curl 进程不计入。
+- 负载脚本另报 `VmHWM`（内核 RSS 高水位，不依赖采样频率）、发压 CPU 毫秒和 wall 毫秒；冷却后再采样，区分请求峰值与空闲保留。
+- 默认每 0.05 秒采样、冷却 6 秒，可用 `QODERZ_PERF_SAMPLE_SECONDS` / `QODERZ_PERF_COOLDOWN_SECONDS` 覆盖；`QODERZ_PERF_BINARY` 可指向对照二进制。
+- 只统计服务端进程；发压的 curl 进程不计入。有请求失败或非 200 时脚本失败，不能把错误路径的低内存计作优化收益。
 - 脚本的输出直接贴进 [performance.md](../performance.md)；要改脚本先想清楚会不会让数字不可比。
 
 ## 禁止事项

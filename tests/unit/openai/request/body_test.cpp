@@ -392,6 +392,79 @@ TEST_CASE("Non-ASCII text stays raw UTF-8", "[openai][body]") {
   CHECK(text_of_message(json::parse(built->m_json).at("messages").at(1)) ==
         "你好 <world> & 'quoted'");
 }
+
+TEST_CASE("Streamed request serialization preserves compact JSON bytes", "[openai][body]") {
+  auto context = basic_context();
+  context.m_system_text = "system 你好\n\"quoted\"";
+  context.m_model.m_raw_json = R"({"key":"performance","weight":0.5,"enabled":true})";
+  context.m_include_tools = true;
+  context.m_tools.push_back(tool_spec{
+      .m_name = "inspect",
+      .m_description = "schema 猫\n\"quoted\"",
+      .m_parameters_json = R"({"type":"object","properties":{"路径":{"type":"string"}}})"});
+
+  std::string text{"你好 😺 \"quoted\"\\path\n\t\r\b\f"};
+  text.push_back('\0');
+  text.push_back('\x01');
+  auto& user = context.m_messages.front();
+  user.m_array_content = true;
+  user.m_blocks = {text_of(text), image_of("https://example.test/猫.png")};
+  user.m_blocks.back().m_cache_control = true;
+
+  auto const built = build_qoder_body(context);
+  REQUIRE(built.has_value());
+  auto const body = parse_ordered(built->m_json);
+  auto const& written = body.at("messages").at(1);
+
+  CHECK(built->m_json == body.dump());
+  CHECK(built->m_json.find(R"(你好 😺 \"quoted\"\\path\n\t\r\b\f\u0000\u0001)") !=
+        std::string::npos);
+  CHECK(built->m_json.find("\\u4f60") == std::string::npos);
+  CHECK(written.at("content") == written.at("contents"));
+  CHECK(written.at("content").at(0).at("text").get<std::string>() == text);
+  CHECK(written.at("content").at(1).at("cache_control").at("type") == "ephemeral");
+  CHECK(body.at("tools").at(0).at("function").at("description") == "schema 猫\n\"quoted\"");
+  CHECK(body.at("model_config").at("weight").get<double>() == 0.5);
+}
+
+TEST_CASE("The context window counts escaped UTF-8 bytes and duplicated contents",
+          "[openai][body]") {
+  auto context = basic_context();
+  context.m_max_tokens = 1;
+  context.m_system_text = "system 猫\n";
+  auto& user = context.m_messages.front();
+  user.m_array_content = true;
+  user.m_blocks = {text_of("你好 😺 \"quoted\"\\path\n\t"), image_of("data:image/png;base64,AA==")};
+  context.m_tools.push_back(
+      tool_spec{.m_name = "inspect", .m_description = "schema 猫\n", .m_parameters_json = "true"});
+
+  for (auto const include_tools : {false, true}) {
+    context.m_include_tools = include_tools;
+    auto const reference = build_qoder_body(context);
+    REQUIRE(reference.has_value());
+    auto const body = parse_ordered(reference->m_json);
+    auto const messages_bytes = body.at("messages").dump().size();
+    auto const tools_bytes = include_tools ? body.at("tools").dump().size() : 2;
+    auto const needed = static_cast<int>((messages_bytes + tools_bytes + 11 + 2) / 3) + 1;
+    context.m_model.m_windows = {needed - 1, needed, needed + 1};
+    context.m_model.m_default_window = needed - 1;
+    context.m_model.m_context = needed + 1;
+
+    auto const built = build_qoder_body(context);
+    REQUIRE(built.has_value());
+    INFO(include_tools);
+    CHECK(built->m_context_length == needed);
+    CHECK(json::parse(built->m_json).at("parameters").at("context_length") == needed);
+  }
+}
+
+TEST_CASE("Streamed request serialization keeps strict UTF-8 validation", "[openai][body]") {
+  auto context = basic_context();
+  context.m_messages.front().m_blocks.front().m_text = std::string(1, static_cast<char>(0xFF));
+
+  CHECK_THROWS_AS(build_qoder_body(context), json::type_error);
+}
+
 TEST_CASE("A request with tools, images, cache and history round-trips", "[openai][body]") {
   request_context context;
   context.m_model = fixture_model();

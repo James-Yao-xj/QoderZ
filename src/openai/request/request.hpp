@@ -21,6 +21,7 @@ namespace qoderz::openai {
 /// exist before candidate selection. The endpoint therefore reads the body once, hands
 /// `m_session_id` to the pool, and only then prepares the request for the account that serves.
 struct prepared_request {
+  /// Normalized messages and last-turn text; first-user text is released after deriving the id.
   normalize_result m_dialog;
   std::string m_system_text;
   std::string m_session_id;
@@ -42,6 +43,12 @@ struct prepared_request {
 /// Adds what depends on the chosen model — the §5 selectors — and picks the task of this turn per
 /// §4.2. `time` is the only source of "now", so a test can pin the task timestamps.
 [[nodiscard]] result<request_context> prepare_request(prepared_request const& prepared,
+                                                      qoder::catalog::model_info const& model,
+                                                      selection::session_store& sessions,
+                                                      clock& time);
+
+/// Consumes the large request payload while retaining metadata for account retries.
+[[nodiscard]] result<request_context> prepare_request(prepared_request&& prepared,
                                                       qoder::catalog::model_info const& model,
                                                       selection::session_store& sessions,
                                                       clock& time);
