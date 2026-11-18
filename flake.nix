@@ -15,7 +15,7 @@
         pkgs:
         pkgs.gcc14Stdenv.mkDerivation {
           pname = "qoderz";
-          version = "0.1.0";
+          version = "0.1.1";
 
           src = pkgs.lib.cleanSourceWith {
             name = "qoderz-source";
