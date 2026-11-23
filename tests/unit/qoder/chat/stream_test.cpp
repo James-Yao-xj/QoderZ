@@ -62,7 +62,7 @@ std::vector<chat_event> of_kind(std::vector<chat_event> const& events, chat_even
   return selected;
 }
 
-chat_event const& only_stop(std::vector<chat_event> const& events) {
+chat_event only_stop(std::vector<chat_event> const& events) {
   auto const stops = of_kind(events, chat_event_kind::stop);
   REQUIRE(stops.size() == 1);
   return stops.front();

@@ -20,7 +20,7 @@ check_cxx_source_compiles("
   int main() { std::expected<int, int> value{0}; return value.value(); }
 " QODERZ_HAS_STD_EXPECTED)
 if(NOT QODERZ_HAS_STD_EXPECTED)
-  message(FATAL_ERROR "qoderz requires C++23 std::expected; use nix develop for a supported toolchain")
+  message(FATAL_ERROR "qoderz requires C++23 std::expected; update the compiler and standard library, or use nix develop")
 endif()
 
 # GCC's "-fmodules-ts" dependency scanner makes every compile uncacheable for

@@ -27,6 +27,27 @@ using namespace std::chrono_literals;
 
 constexpr auto poll_step = 5ms;
 
+/// Create a pipe whose original descriptors do not survive exec.
+int make_child_pipe(int (&descriptors)[2]) {
+#if defined(__APPLE__)
+  // macOS has no pipe2. Set close-on-exec before this harness starts the child.
+  if (::pipe(descriptors) != 0) {
+    return -1;
+  }
+  if (::fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) == -1 ||
+      ::fcntl(descriptors[1], F_SETFD, FD_CLOEXEC) == -1) {
+    int const failure = errno;
+    ::close(descriptors[0]);
+    ::close(descriptors[1]);
+    errno = failure;
+    return -1;
+  }
+  return 0;
+#else
+  return ::pipe2(descriptors, O_CLOEXEC);
+#endif
+}
+
 std::vector<std::string> merged_environment(std::map<std::string, std::string> const& overrides) {
   std::map<std::string, std::string> merged;
   if (environ != nullptr) {
@@ -151,11 +172,11 @@ qoderz::result<process_runner> process_runner::start(options const& options) {
 
   int out_pipe[2] = {-1, -1};
   int err_pipe[2] = {-1, -1};
-  if (::pipe2(out_pipe, O_CLOEXEC) != 0) {
+  if (make_child_pipe(out_pipe) != 0) {
     return std::unexpected(make_error(error_kind::io, "the test child pipe could not be created: " +
                                                           std::string{std::strerror(errno)}));
   }
-  if (::pipe2(err_pipe, O_CLOEXEC) != 0) {
+  if (make_child_pipe(err_pipe) != 0) {
     int const failure = errno;
     ::close(out_pipe[0]);
     ::close(out_pipe[1]);
