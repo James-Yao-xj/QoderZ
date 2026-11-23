@@ -13,6 +13,16 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_L
   message(FATAL_ERROR "qoderz requires GCC 14 or newer (found ${CMAKE_CXX_COMPILER_VERSION})")
 endif()
 
+# C++23 mode alone does not guarantee that the standard library has expected.
+include(CheckCXXSourceCompiles)
+check_cxx_source_compiles("
+  #include <expected>
+  int main() { std::expected<int, int> value{0}; return value.value(); }
+" QODERZ_HAS_STD_EXPECTED)
+if(NOT QODERZ_HAS_STD_EXPECTED)
+  message(FATAL_ERROR "qoderz requires C++23 std::expected; use nix develop for a supported toolchain")
+endif()
+
 # GCC's "-fmodules-ts" dependency scanner makes every compile uncacheable for
 # ccache (it reports "Unsupported compiler option") and doubles the work per
 # translation unit. QoderZ does not use C++20 modules, so the scanner only costs
@@ -28,6 +38,7 @@ else()
 endif()
 find_package(Boost 1.83 REQUIRED CONFIG COMPONENTS url)
 find_package(OpenSSL REQUIRED)
+find_package(Threads REQUIRED)
 find_package(nlohmann_json 3.11 REQUIRED)
 find_package(CLI11 2.3 REQUIRED)
 
@@ -64,6 +75,7 @@ target_link_libraries(qoderz_core
   PUBLIC
     nlohmann_json::nlohmann_json
     Boost::headers
+    Threads::Threads
     CLI11::CLI11
   PRIVATE
     OpenSSL::SSL

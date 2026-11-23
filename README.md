@@ -16,7 +16,9 @@ QoderZ 是一个用 C++23 重写的 Qoder → OpenAI 兼容网关。它把 Qoder
 
 ## 快速开始
 
-环境：Nix（flakes）、GCC 14、CMake + Ninja。
+环境：Nix（flakes）、CMake + Ninja。Linux 使用 GCC 14，macOS（Apple Silicon / Intel）使用 Nix Clang/libc++。
+
+macOS 构建与测试步骤见[构建文档](docs/development/build.md#macosapple-silicon-与-intel)。
 
 ```sh
 nix develop --command cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON

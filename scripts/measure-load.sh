@@ -2,6 +2,11 @@
 # Load footprint of `qoderz serve`: 400 KB text bodies, 100 requests, 8 at a time, driven by curl.
 set -euo pipefail
 
+if [[ "$(uname -s)" != Linux ]]; then
+  printf 'This benchmark requires Linux procfs metrics. Build and test with scripts/build.sh on macOS.\n' >&2
+  exit 1
+fi
+
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 build="${QODERZ_PERF_BUILD_DIR:-$root/build-perf}"
 jobs="${QODERZ_PERF_JOBS:-6}"

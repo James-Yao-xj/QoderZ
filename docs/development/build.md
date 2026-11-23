@@ -1,6 +1,6 @@
 # 构建与工具链
 
-QoderZ 用 Nix flake 固定整套工具链。目标很简单：换一台 Linux 机器，执行 `nix develop`，就能得到与 CI 一致的 GCC 14、CMake、Ninja 和 clang-format，不需要在系统里手工拼环境。
+QoderZ 用 Nix flake 固定整套工具链。目标很简单：换一台 Linux 或 macOS 机器，执行 `nix develop`，就能得到与 CI 一致的 GCC 14、CMake、Ninja 和 clang-format，不需要在系统里手工拼环境。
 
 ## 工具链一览
 
@@ -238,3 +238,24 @@ rm -rf build result
 ```
 
 需要连 Nix 评估缓存一起清理时，使用 `nix flake check` / `nix build` 的自然重建即可；不要删除 `.git` 或仓库外的共享缓存。
+
+## macOS（Apple Silicon 与 Intel）
+
+Nix flake 支持 `aarch64-darwin` 和 `x86_64-darwin`。macOS 使用 Nix 提供的
+Clang/libc++，Linux 保持 GCC 14。请先安装 Nix 并启用 `nix-command` 和 `flakes`，
+然后在仓库根目录执行：
+
+```sh
+nix develop --command cmake --version
+nix develop --command bash scripts/build.sh
+nix develop --command ctest --test-dir build --output-on-failure
+nix build .#
+./result/bin/qoderz --help
+```
+
+不要直接使用系统 Apple Clang 替代 devShell：项目需要标准库提供 C++23
+`std::expected`，CMake 会在配置时检查此能力。`scripts/build.sh` 在 macOS 使用
+`sysctl` 读取 CPU 和内存；预算与格式脚本兼容系统 Bash 3.2。
+登录时通过系统 `open` 命令启动浏览器，凭据路径继续使用既有 XDG/`~/.config`
+规则。`measure-idle.sh` 与 `measure-load.sh` 的 PSS、峰值和 CPU 指标依赖 Linux
+`/proc`，仅支持 Linux；在 macOS 上会明确退出，避免输出错误的测量结果。

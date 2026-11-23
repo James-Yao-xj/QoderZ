@@ -39,7 +39,11 @@ if ! command -v clang-format >/dev/null 2>&1; then
   exit 1
 fi
 
-mapfile -t files < <(
+# Keep this loop compatible with the Bash 3.2 shipped with macOS.
+files=()
+while IFS= read -r file; do
+  files+=("$file")
+done < <(
   find "$root/src" "$root/tests" -type f \
     \( -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' -o -name '*.hpp' -o -name '*.h' \) \
     | sort

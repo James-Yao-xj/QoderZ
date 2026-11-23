@@ -9,11 +9,15 @@
       systems = [
         "x86_64-linux"
         "aarch64-linux"
+        "aarch64-darwin"
+        "x86_64-darwin"
       ];
       for_all_systems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
+      # Darwin uses Clang and libc++ from the same Nix toolchain.
+      toolchain = pkgs: if pkgs.stdenv.isDarwin then pkgs.llvmPackages.stdenv else pkgs.gcc14Stdenv;
       mk_qoderz =
         pkgs:
-        pkgs.gcc14Stdenv.mkDerivation {
+        (toolchain pkgs).mkDerivation {
           pname = "qoderz";
           version = "0.1.1";
 
@@ -60,7 +64,7 @@
           meta = {
             description = "Qoder to OpenAI-compatible gateway";
             mainProgram = "qoderz";
-            platforms = pkgs.lib.platforms.linux;
+            platforms = systems;
           };
         };
     in
@@ -78,11 +82,10 @@
       });
 
       devShells = for_all_systems (pkgs: {
-        default = (pkgs.mkShell.override { stdenv = pkgs.gcc14Stdenv; }) {
+        default = (pkgs.mkShell.override { stdenv = toolchain pkgs; }) {
           packages = with pkgs; [
             cmake
             ninja
-            gcc14
             boost
             openssl
             nlohmann_json
@@ -91,15 +94,14 @@
             clang-tools
             ccache
 
-            gdb
             curl
             jq
-          ];
+          ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [ pkgs.gdb ];
 
           shellHook = ''
-            export CC="${pkgs.gcc14}/bin/gcc"
-            export CXX="${pkgs.gcc14}/bin/g++"
-            echo "qoderz dev shell: $($CXX -dumpfullversion) / cmake $(cmake --version | head -n1 | cut -d' ' -f3)"
+            export CC="${(toolchain pkgs).cc}/bin/cc"
+            export CXX="${(toolchain pkgs).cc}/bin/c++"
+            echo "qoderz dev shell: $($CXX --version | head -n1) / cmake $(cmake --version | head -n1 | cut -d' ' -f3)"
             # A cold build of the tree takes a few minutes; ccache turns the
             # repeat cost into seconds. Keep the cache bounded so it cannot
             # crowd out the rest of the user's home directory.

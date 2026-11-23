@@ -64,3 +64,5 @@
 - 新增目录或公共接口时，至少同步更新 `docs/index.md` 与对应开发文档。
 - 文档中的命令必须可以直接复制执行；涉及 Nix 时默认在 `nix develop` 内运行。
 - 性能数字必须来自脚本的实测输出，并写清机器、编译器和测量口径。
+
+macOS（Apple Silicon / Intel）的 Nix 工具链、构建与测试命令见[构建与工具链](development/build.md)。Linux procfs 性能测量脚本不适用于 macOS。
