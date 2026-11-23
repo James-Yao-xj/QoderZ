@@ -42,7 +42,11 @@ count_effective_lines() {
   ' "$1"
 }
 
-mapfile -t files < <(
+# Keep this loop compatible with the Bash 3.2 shipped with macOS.
+files=()
+while IFS= read -r file; do
+  files+=("$file")
+done < <(
   find "$root" -type f \
     \( -name '*.cpp' -o -name '*.cc' -o -name '*.cxx' -o -name '*.hpp' -o -name '*.h' \) \
     -not -path "$root/build/*" \

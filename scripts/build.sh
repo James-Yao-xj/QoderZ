@@ -9,8 +9,16 @@ mib_per_compile_unit=1024
 max_compiler_arena_mib=6144
 reserved_cores=2
 
-cores="$(nproc 2>/dev/null || echo 2)"
-mem_mib="$(awk '/^MemTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 2048)"
+case "$(uname -s)" in
+  Darwin)
+    cores="$(sysctl -n hw.logicalcpu)"
+    mem_mib=$(( $(sysctl -n hw.memsize) / 1024 / 1024 ))
+    ;;
+  *)
+    cores="$(nproc 2>/dev/null || echo 2)"
+    mem_mib="$(awk '/^MemTotal:/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 2048)"
+    ;;
+esac
 
 arena_mib=$((mem_mib * 3 / 4))
 ((arena_mib > max_compiler_arena_mib)) && arena_mib=$max_compiler_arena_mib
